@@ -10,7 +10,27 @@ pub const CSMAGIC_EMBEDDED_SIGNATURE : UInt32 = 0xFADE_0CC0
 
 pub const CSSLOT_ENTITLEMENTS : UInt32 = 0x0001_0000
 
+pub const EXPORT_FLAG_REEXPORT : UInt64 = 0x08
+
+pub const EXPORT_FLAG_STUB_AND_RESOLVER : UInt64 = 0x10
+
+pub const EXPORT_FLAG_WEAK : UInt64 = 0x04
+
+pub const EXPORT_KIND_ABSOLUTE : UInt64 = 0x02
+
+pub const EXPORT_KIND_MASK : UInt64 = 0x03
+
+pub const EXPORT_KIND_REGULAR : UInt64 = 0x00
+
+pub const EXPORT_KIND_THREAD_LOCAL : UInt64 = 0x01
+
 pub const LC_CODE_SIGNATURE : UInt32 = 0x1D
+
+pub const LC_DYLD_EXPORTS_TRIE : UInt32 = 0x8000_0033
+
+pub const LC_DYLD_INFO : UInt32 = 0x22
+
+pub const LC_DYLD_INFO_ONLY : UInt32 = 0x8000_0022
 
 pub const LC_DYSYMTAB : UInt32 = 0xB
 
@@ -55,6 +75,10 @@ pub fn debug_line_section(MachSlice) -> Section? raise MachscopeError
 pub fn debug_line_str_section(MachSlice) -> Section? raise MachscopeError
 
 pub fn entitlements_der(MachSlice, SignatureRegion) -> Bytes? raise MachscopeError
+
+pub fn export_trie(MachSlice) -> ExportTrieRegion? raise MachscopeError
+
+pub fn exports(MachSlice) -> Array[Export] raise MachscopeError
 
 pub fn file_offset_of_address(Array[Segment], Int64) -> Int64?
 
@@ -157,6 +181,21 @@ pub(all) enum Endian {
   Big
 }
 pub fn Endian::tag(Self) -> String
+
+pub(all) struct Export {
+  name : String
+  address : UInt64
+  flags : UInt64
+  original_name : String
+}
+pub fn Export::is_reexport(Self) -> Bool
+pub fn Export::is_weak(Self) -> Bool
+pub fn Export::kind(Self) -> UInt64
+
+pub(all) struct ExportTrieRegion {
+  offset : Int64
+  size : Int64
+}
 
 pub(all) struct FatSlice {
   cpu_type : Int64

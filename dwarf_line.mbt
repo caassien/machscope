@@ -9,9 +9,7 @@
 /// A line program's register file, as DWARF defines it.
 ///
 /// The fields correspond one-to-one with the state machine's registers in
-/// section 6.2.2 of the DWARF specification, which is why they are named after
-/// the register names rather than being folded into a smaller struct: a reader
-/// cross-checking this against the specification should not have to map names.
+/// section 6.2.2 of the DWARF specification.
 /// Some registers are written by opcodes but never read by this
 /// implementation: `op_index` matters only for very long instruction word
 /// targets, and the row flags are carried for a debugger's benefit. They are
