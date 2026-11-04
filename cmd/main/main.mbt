@@ -14,6 +14,8 @@ enum Subcommand {
   Commands
   /// Print the symbol table.
   Symbols
+  /// Print segments and their sections.
+  Sections
   /// Print usage.
   Help
 }
@@ -43,6 +45,7 @@ const USAGE : String =
   #|  machscope <file>              summarize the header(s)
   #|  machscope --commands <file>   list load commands
   #|  machscope --symbols <file>    list defined and undefined symbols
+  #|  machscope --sections <file>   list segments and their sections
   #|  machscope --help              show this message
   #|
   #|Exit status is 1 when the file cannot be parsed, so this is usable as a
@@ -61,6 +64,7 @@ fn parse_args(args : Array[String]) -> (Subcommand, String?) {
       "--help" | "-h" => return (Help, None)
       "--commands" | "-c" => mode = Commands
       "--symbols" | "-s" => mode = Symbols
+      "--sections" | "-S" => mode = Sections
       _ => path = Some(arg)
     }
   }
@@ -131,6 +135,26 @@ fn report(slices : Array[(String, @lib.MachSlice)], mode : Subcommand) -> Unit {
   for entry in slices {
     let (arch, slice) = entry
     match mode {
+      Sections => {
+        let segs = Ok(@lib.segments(slice)) catch { e => Err(e) }
+        let segs = match segs {
+          Ok(v) => v
+          Err(e) => {
+            println("\{arch}: cannot read segments: \{e.to_string()}")
+            continue
+          }
+        }
+        for seg in segs {
+          println(
+            "  \{seg.name}  vmaddr 0x\{@lib.hex(seg.vmaddr)}  vmsize 0x\{@lib.hex(seg.vmsize)}  fileoff \{seg.file_offset}  filesize \{seg.file_size}",
+          )
+          for sec in seg.sections {
+            println(
+              "    \{sec.name}  addr 0x\{@lib.hex(sec.addr)}  size \{sec.size}  offset \{sec.file_offset}",
+            )
+          }
+        }
+      }
       Symbols => {
         let syms = Ok(@lib.symbols(slice)) catch { e => Err(e) }
         let syms = match syms {

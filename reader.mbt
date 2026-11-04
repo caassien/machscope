@@ -191,13 +191,16 @@ pub fn Bounds::fixed_name(
   what : String,
 ) -> String raise MachscopeError {
   self.require(offset, width, what)
-  let buf = Buffer::Buffer(size_hint=width.to_int())
+  let buf = StringBuilder()
   for i in 0..<width.to_int() {
     let b = self.bytes.at(offset.to_int() + i)
     if b.to_int() == 0 {
       break
     }
-    buf.write_byte(b)
+    // Mach-O names are ASCII in practice. Bytes are widened one at a time
+    // rather than decoded as UTF-8 so that a malformed name still yields a
+    // distinct string instead of collapsing into replacement characters.
+    buf.write_char(b.to_char())
   }
-  buf.to_bytes().to_unchecked_string()
+  buf.to_string()
 }
