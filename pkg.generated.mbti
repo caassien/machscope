@@ -4,6 +4,14 @@ package "caassien/machscope"
 // Values
 pub const CPU_SUBTYPE_MASK : Int64 = 0xFF00_0000
 
+pub const CSMAGIC_CODEDIRECTORY : UInt32 = 0xFADE_0C02
+
+pub const CSMAGIC_EMBEDDED_SIGNATURE : UInt32 = 0xFADE_0CC0
+
+pub const CSSLOT_ENTITLEMENTS : UInt32 = 0x0001_0000
+
+pub const LC_CODE_SIGNATURE : UInt32 = 0x1D
+
 pub const LC_DYSYMTAB : UInt32 = 0xB
 
 pub const LC_SEGMENT : UInt32 = 0x1
@@ -24,19 +32,49 @@ pub const S_ATTR_DEBUG : UInt32 = 0x0200_0000
 
 pub const S_ZEROFILL : UInt32 = 0x1
 
+pub const TAG_CTX_0 : UInt32 = 0xA0
+
+pub const TAG_CTX_1 : UInt32 = 0xA1
+
+pub const TAG_OCTET_STRING : UInt32 = 0x04
+
+pub const TAG_OID : UInt32 = 0x06
+
+pub const TAG_SEQUENCE : UInt32 = 0x30
+
+pub const TAG_SET : UInt32 = 0x31
+
+pub const TAG_UTF8 : UInt32 = 0x0C
+
+pub fn children(Bytes, DerElement) -> Array[DerElement] raise MachscopeError
+
+pub fn code_directory(MachSlice, SignatureRegion) -> CodeDirectory? raise MachscopeError
+
+pub fn entitlements_der(MachSlice, SignatureRegion) -> Bytes? raise MachscopeError
+
 pub fn file_offset_of_address(Array[Segment], Int64) -> Int64?
 
 pub fn find_section(Array[Segment], String, String) -> Section?
+
+pub fn find_signed_data(Bytes) -> DerElement raise MachscopeError
 
 pub fn find_symtab(MachSlice) -> SymtabCommand? raise MachscopeError
 
 pub fn hex(Int64) -> String
 
+pub fn octet_string(Bytes, DerElement) -> Bytes raise MachscopeError
+
 pub fn parse(Bytes) -> MachFile raise MachscopeError
 
 pub fn parse_slice(Bounds, Int64) -> MachSlice raise MachscopeError
 
+pub fn read_element(Bytes, Int64, Int64) -> DerElement raise MachscopeError
+
 pub fn segments(MachSlice) -> Array[Segment] raise MachscopeError
+
+pub fn signature_blobs(MachSlice, SignatureRegion) -> Array[SignatureBlobRef] raise MachscopeError
+
+pub fn signature_region(MachSlice) -> SignatureRegion? raise MachscopeError
 
 pub fn string_table_entry(MachSlice, SymtabCommand, UInt32) -> String raise MachscopeError
 
@@ -81,9 +119,29 @@ pub fn Bounds::read_u8(Self, Cursor) -> (UInt32, Cursor) raise MachscopeError
 pub fn Bounds::require(Self, Int64, Int64, String) -> Unit raise MachscopeError
 pub fn Bounds::slice(Self, Int64, Int64, String) -> Bytes raise MachscopeError
 
+pub(all) struct CodeDirectory {
+  magic : UInt32
+  length : Int64
+  version : UInt32
+  flags : UInt32
+  identifier : String
+  team_id : String
+  hash_type : UInt32
+  hash_size : UInt32
+  page_size : UInt32
+  code_slots : UInt32
+}
+
 pub(all) struct Cursor {
   pos : Int64
   endian : Endian
+}
+
+pub(all) struct DerElement {
+  tag : UInt32
+  content_start : Int64
+  content_end : Int64
+  next : Int64
 }
 
 pub(all) enum Endian {
@@ -171,6 +229,18 @@ pub(all) struct Segment {
 }
 pub fn Segment::contains_address(Self, Int64) -> Bool
 pub fn Segment::contains_offset(Self, Int64) -> Bool
+
+pub(all) struct SignatureBlobRef {
+  slot : UInt32
+  offset : Int64
+  magic : UInt32
+  length : Int64
+}
+
+pub(all) struct SignatureRegion {
+  offset : Int64
+  size : Int64
+}
 
 pub(all) struct Symbol {
   name : String
