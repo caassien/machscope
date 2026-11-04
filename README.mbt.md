@@ -15,11 +15,14 @@ anything. Both can run MoonBit, so both can parse a binary directly.
 | Universal (fat) binaries, `fat_arch` and `fat_arch_64` | done |
 | Load-command framing with full bounds checking | done |
 | Type-level `cpusubtype` / capability-bit split | done |
-| Segment and section table | planned |
-| Symbol table, dyld export trie | planned |
-| Code signature, entitlements | planned |
-| dSYM / DWARF line tables, address → `file:line` | planned |
-| CLI (`sections`, `symbols`, `lookup`, `entitlements`) | planned |
+| Segment and section table, address ↔ file offset | done |
+| Symbol table with names resolved through the string table | done |
+| Embedded code signature: superblob, CodeDirectory | done |
+| Entitlements, reached through the PKCS#7 DER wrapper | done |
+| DWARF 5 line tables, address → `file:line:column` | done |
+| CLI (`header`, `--commands`, `--symbols`, `--sections`, `--signature`, `--lookup`) | done |
+| dyld export trie, chained fixups | planned |
+| `.debug_info` variable and type lookup | planned |
 
 ## Why it is written this way
 
@@ -33,6 +36,19 @@ The parser is two-stage on purpose: `parse_slice` validates the header and walks
 the load-command table end to end, and only then are individual commands
 interpreted. A file whose command table does not tile `sizeofcmds` exactly is
 rejected before any command-specific code runs.
+
+## Symbolicating a crash address
+
+The end-to-end case, checked against `dwarfdump` on the fixture:
+
+```
+$ machscope 0x100000490 internal/fixtures/sample.dsym
+t.c:3:33
+```
+
+`dwarfdump --debug-line` reports the same address as line 3, column 33. The
+path is assembled from the line program's directory table and file table, both
+of which DWARF 5 encodes as a description of forms rather than as plain strings.
 
 ## Usage
 

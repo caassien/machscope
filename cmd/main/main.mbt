@@ -18,6 +18,8 @@ enum Subcommand {
   Sections
   /// Print the code signature identity.
   Signature
+  /// Resolve an address to a source position.
+  Lookup(Int64)
   /// Print usage.
   Help
 }
@@ -49,6 +51,8 @@ const USAGE : String =
   #|  machscope --symbols <file>    list defined and undefined symbols
   #|  machscope --sections <file>   list segments and their sections
   #|  machscope --signature <file>  show the code signature identity
+  #|  machscope --lookup <addr> <file>
+  #|                                resolve an address to file:line
   #|  machscope --help              show this message
   #|
   #|Exit status is 1 when the file cannot be parsed, so this is usable as a
@@ -62,6 +66,7 @@ const USAGE : String =
 fn parse_args(args : Array[String]) -> (Subcommand, String?) {
   let mut mode = Header
   let mut path : String? = None
+  let mut want_lookup = false
   for arg in args {
     match arg {
       "--help" | "-h" => return (Help, None)
@@ -69,9 +74,16 @@ fn parse_args(args : Array[String]) -> (Subcommand, String?) {
       "--symbols" | "-s" => mode = Symbols
       "--sections" | "-S" => mode = Sections
       "--signature" | "-g" => mode = Signature
-      _ => path = Some(arg)
+      "--lookup" | "-l" => want_lookup = true
+      _ =>
+        if arg.has_prefix("0x") {
+          mode = Lookup(parse_hex(arg))
+        } else {
+          path = Some(arg)
+        }
     }
   }
+  let _ = want_lookup
   (mode, path)
 }
 
@@ -134,6 +146,35 @@ fn main {
 }
 
 ///|
+/// Parses a hexadecimal address argument.
+fn parse_hex(text : String) -> Int64 {
+  let mut v = 0L
+  let mut i = 2 // skip the 0x prefix
+  while i < text.length() {
+    let c = text.code_unit_at(i).to_int()
+    let d = if c >= 97 { c - 87 } else if c >= 65 { c - 55 } else { c - 48 }
+    if d >= 0 && d < 16 {
+      v = v * 16L + d.to_int64()
+    }
+    i = i + 1
+  }
+  v
+}
+
+///|
+/// Reads the line tables, reporting the reason when there are none.
+fn try_tables(slice : @lib.MachSlice, arch : String) -> Array[@lib.LineTable]? {
+  let result = Ok(@lib.line_tables(slice, comp_dir="")) catch { e => Err(e) }
+  match result {
+    Ok(t) => Some(t)
+    Err(e) => {
+      println("\{arch}: cannot read line tables: \{e.to_string()}")
+      None
+    }
+  }
+}
+
+///|
 /// Finds the signature region, reporting the reason when there is none.
 fn try_signature(
   slice : @lib.MachSlice,
@@ -177,6 +218,25 @@ fn report(slices : Array[(String, @lib.MachSlice)], mode : Subcommand) -> Unit {
   for entry in slices {
     let (arch, slice) = entry
     match mode {
+      Lookup(addr) => {
+        let tables = match try_tables(slice, arch) {
+          Some(t) => t
+          None => continue
+        }
+        let mut hit = false
+        for t in tables {
+          match @lib.lookup_address(t, addr) {
+            Some(loc) => {
+              println("\{loc.file}:\{loc.line}:\{loc.column}")
+              hit = true
+            }
+            None => ()
+          }
+        }
+        if !hit {
+          println("\{arch}: no line information for 0x\{@lib.hex(addr)}")
+        }
+      }
       Signature => {
         let region = match try_signature(slice, arch) {
           Some(r) => r

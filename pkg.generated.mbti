@@ -50,6 +50,10 @@ pub fn children(Bytes, DerElement) -> Array[DerElement] raise MachscopeError
 
 pub fn code_directory(MachSlice, SignatureRegion) -> CodeDirectory? raise MachscopeError
 
+pub fn debug_line_section(MachSlice) -> Section? raise MachscopeError
+
+pub fn debug_line_str_section(MachSlice) -> Section? raise MachscopeError
+
 pub fn entitlements_der(MachSlice, SignatureRegion) -> Bytes? raise MachscopeError
 
 pub fn file_offset_of_address(Array[Segment], Int64) -> Int64?
@@ -61,6 +65,10 @@ pub fn find_signed_data(Bytes) -> DerElement raise MachscopeError
 pub fn find_symtab(MachSlice) -> SymtabCommand? raise MachscopeError
 
 pub fn hex(Int64) -> String
+
+pub fn line_tables(MachSlice, comp_dir? : String) -> Array[LineTable] raise MachscopeError
+
+pub fn lookup_address(LineTable, Int64) -> SourceLocation?
 
 pub fn octet_string(Bytes, DerElement) -> Bytes raise MachscopeError
 
@@ -161,6 +169,29 @@ pub(all) struct FatSlice {
 pub fn FatSlice::cpu_capabilities(Self) -> Int64
 pub fn FatSlice::cpu_subtype_base(Self) -> Int64
 
+pub(all) struct LineRow {
+  address : Int64
+  line : UInt32
+  column : UInt32
+  file : UInt32
+  is_stmt : Bool
+  end_sequence : Bool
+  op_index : UInt32
+  basic_block : Bool
+  prologue_end : Bool
+  epilogue_begin : Bool
+  isa : UInt32
+  discriminator : UInt32
+}
+
+pub(all) struct LineTable {
+  version : UInt32
+  comp_dir : String
+  dirs : Array[String]
+  files : Array[String]
+  rows : Array[LineRow]
+}
+
 pub(all) enum MachFile {
   Thin(MachSlice)
   Fat(Array[FatSlice])
@@ -240,6 +271,12 @@ pub(all) struct SignatureBlobRef {
 pub(all) struct SignatureRegion {
   offset : Int64
   size : Int64
+}
+
+pub(all) struct SourceLocation {
+  file : String
+  line : UInt32
+  column : UInt32
 }
 
 pub(all) struct Symbol {
