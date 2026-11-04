@@ -1,17 +1,12 @@
 // DWARF line-number programs: the mapping from a code address to the source
 // file and line it came from.
 //
-// This is the part of DWARF that turns a crash report's `0x1000046c` into
-// `t.c:2:30`, and it is the only part that is both small enough to implement
-// well in a month and useful on its own. The `.debug_info` tree, expression
-// evaluation and type reconstruction are out of scope; `.debug_line` is not,
-// because it has a self-contained state machine that is fully specified and
-// fully verifiable.
+// `.debug_line` maps a code address to the source line it came from. The
+// `.debug_info` tree, expression evaluation and type reconstruction are not
+// implemented.
 //
-// A line program is a bytecode: a prologue declaring the encoding, then
-// opcodes that advance a register file, emitting a row whenever a position is
-// final. Rows are sorted by address at the end, and an address is looked up in
-// that sorted table.
+// A line program is a prologue followed by opcodes that advance a register
+// file, emitting a row whenever a position becomes final.
 
 ///|
 /// One decoded row of a line table: an address together with the source

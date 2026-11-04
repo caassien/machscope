@@ -1,11 +1,9 @@
 // Mach-O container parsing: magic numbers, fat (universal) binaries, the
 // `mach_header` of a thin image and the generic `load_command` framing.
 //
-// The parser is deliberately two-stage. `parse_slice` validates the header and
-// walks the load-command table so that every offset and size is checked before
-// any command is interpreted; `commands.mbt` then turns the framing into typed
-// values. Nothing here allocates in proportion to a length field until that
-// length has been bounds-checked.
+// Parsing happens in two stages. `parse_slice` validates the header and walks
+// the load-command table, checking every offset and size; `commands.mbt` then
+// interprets individual commands.
 
 ///|
 /// The four byte orders and word sizes a Mach-O image can be wrapped in.

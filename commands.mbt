@@ -1,10 +1,8 @@
 // Typed load commands.
 //
 // `macho.mbt` frames the command table; this file gives the framing meaning.
-// Commands that carry information the rest of the library needs — the segment
-// table, the symbol table, the string table — are decoded into structs.
-// Everything else stays a `RawCommand` with its number intact, because
-// presenting an unknown command is more useful than refusing the file.
+// The segment, symbol and string tables are decoded into structs. Every other
+// command is left as a `RawCommand`.
 
 ///|
 /// `LC_SYMTAB`: where the symbol table and its string table live.

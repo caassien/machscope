@@ -20,6 +20,8 @@ enum Subcommand {
   Signature
   /// Resolve an address to a source position.
   Lookup(Int64)
+  /// Print exported symbols from the dyld export trie.
+  Exports
   /// Print usage.
   Help
 }
@@ -53,6 +55,7 @@ const USAGE : String =
   #|  machscope --signature <file>  show the code signature identity
   #|  machscope --lookup <addr> <file>
   #|                                resolve an address to file:line
+  #|  machscope --exports <file>    list exported symbols
   #|  machscope --help              show this message
   #|
   #|Exit status is 1 when the file cannot be parsed, so this is usable as a
@@ -75,6 +78,7 @@ fn parse_args(args : Array[String]) -> (Subcommand, String?) {
       "--sections" | "-S" => mode = Sections
       "--signature" | "-g" => mode = Signature
       "--lookup" | "-l" => want_lookup = true
+      "--exports" | "-e" => mode = Exports
       _ =>
         if arg.has_prefix("0x") {
           mode = Lookup(parse_hex(arg))
@@ -141,6 +145,19 @@ fn main {
         listed.push(("arch \{s.cpu_type}", s.image))
       }
       report(listed, mode)
+    }
+  }
+}
+
+///|
+/// Reads the export trie, reporting the reason when it cannot be read.
+fn try_exports(slice : @lib.MachSlice, arch : String) -> Array[@lib.Export]? {
+  let result = Ok(@lib.exports(slice)) catch { e => Err(e) }
+  match result {
+    Ok(l) => Some(l)
+    Err(e) => {
+      println("\{arch}: cannot read exports: \{e.to_string()}")
+      None
     }
   }
 }
@@ -218,6 +235,20 @@ fn report(slices : Array[(String, @lib.MachSlice)], mode : Subcommand) -> Unit {
   for entry in slices {
     let (arch, slice) = entry
     match mode {
+      Exports => {
+        let list = match try_exports(slice, arch) {
+          Some(l) => l
+          None => continue
+        }
+        println("\{arch}: \{list.length()} exported symbols")
+        for e in list {
+          let kind = if e.is_reexport() { "R" } else { "T" }
+          let weak = if e.is_weak() { " (weak)" } else { "" }
+          println(
+            "  0x\{@lib.hex(e.address.reinterpret_as_int64())} \{kind} \{e.name}\{weak}",
+          )
+        }
+      }
       Lookup(addr) => {
         let tables = match try_tables(slice, arch) {
           Some(t) => t

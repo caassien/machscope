@@ -8,9 +8,8 @@
 // tags for sequences, octet strings and OIDs — and refuses everything else
 // rather than guessing.
 //
-// This is deliberately not a general ASN.1 library. The parser's contract is
-// that it either returns the entitlements bytes or an error naming why it could
-// not; it never returns partial DER.
+// Not a general ASN.1 library. It returns the payload or an error, never
+// partial DER.
 
 ///|
 /// One DER element: its tag, its content range and the offset just past it.

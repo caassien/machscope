@@ -1,8 +1,7 @@
 // Differential tests for the symbol table, against `nm` as the oracle.
 //
-// `nm` reads the same `LC_SYMTAB` and prints names and addresses; if the parser
-// disagrees with it on the order, the count, or the spelling of a name, one of
-// the two is wrong and it is worth knowing which.
+// `nm` reads the same `LC_SYMTAB`; any disagreement on order, count or spelling
+// is a defect in one of the two.
 
 ///|
 /// The `LC_SYMTAB` of a thin fixture.
