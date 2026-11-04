@@ -18,6 +18,16 @@ pub const N_STAB : UInt32 = 0xE0
 
 pub const N_TYPE : UInt32 = 0x0E
 
+pub const SECTION_TYPE : UInt32 = 0x0000_00FF
+
+pub const S_ATTR_DEBUG : UInt32 = 0x0200_0000
+
+pub const S_ZEROFILL : UInt32 = 0x1
+
+pub fn file_offset_of_address(Array[Segment], Int64) -> Int64?
+
+pub fn find_section(Array[Segment], String, String) -> Section?
+
 pub fn find_symtab(MachSlice) -> SymtabCommand? raise MachscopeError
 
 pub fn hex(Int64) -> String
@@ -25,6 +35,8 @@ pub fn hex(Int64) -> String
 pub fn parse(Bytes) -> MachFile raise MachscopeError
 
 pub fn parse_slice(Bounds, Int64) -> MachSlice raise MachscopeError
+
+pub fn segments(MachSlice) -> Array[Segment] raise MachscopeError
 
 pub fn string_table_entry(MachSlice, SymtabCommand, UInt32) -> String raise MachscopeError
 
@@ -131,6 +143,34 @@ pub(all) struct RawCommand {
   size : UInt32
   offset : Int64
 }
+
+pub(all) struct Section {
+  name : String
+  segment_name : String
+  addr : Int64
+  size : Int64
+  file_offset : UInt32
+  align : UInt32
+  reloc_offset : UInt32
+  nreloc : UInt32
+  flags : UInt32
+}
+pub fn Section::is_debug(Self) -> Bool
+pub fn Section::is_zero_fill(Self) -> Bool
+
+pub(all) struct Segment {
+  name : String
+  vmaddr : Int64
+  vmsize : Int64
+  file_offset : Int64
+  file_size : Int64
+  init_prot : UInt32
+  nsects : UInt32
+  flags : UInt32
+  sections : Array[Section]
+}
+pub fn Segment::contains_address(Self, Int64) -> Bool
+pub fn Segment::contains_offset(Self, Int64) -> Bool
 
 pub(all) struct Symbol {
   name : String

@@ -104,14 +104,12 @@ fn command_payload(
 ) -> Bounds raise MachscopeError {
   let start = cmd.offset + 8L
   let size = cmd.size.to_int64() - 8L
-  Bounds::{ ..slice.bounds, start, limit: cmd.offset + cmd.size.to_int64(), }.require(
-    start, size, "command payload",
-  )
-  Bounds::{
-    bytes: slice.bounds.bytes,
-    start,
-    limit: cmd.offset + cmd.size.to_int64(),
-  }
+  slice.bounds.require(start, size, "command payload")
+  // `start` moves to the payload but `limit` stays at the slice's end: embedded
+  // tables such as a segment's section list are part of the command's
+  // `cmdsize`, which the framing already bounded, and capping the view at the
+  // command's end here would double-count that check and reject valid tables.
+  Bounds::{ bytes: slice.bounds.bytes, start, limit: slice.bounds.limit, }
 }
 
 ///|
