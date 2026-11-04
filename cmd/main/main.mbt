@@ -16,6 +16,8 @@ enum Subcommand {
   Symbols
   /// Print segments and their sections.
   Sections
+  /// Print the code signature identity.
+  Signature
   /// Print usage.
   Help
 }
@@ -46,6 +48,7 @@ const USAGE : String =
   #|  machscope --commands <file>   list load commands
   #|  machscope --symbols <file>    list defined and undefined symbols
   #|  machscope --sections <file>   list segments and their sections
+  #|  machscope --signature <file>  show the code signature identity
   #|  machscope --help              show this message
   #|
   #|Exit status is 1 when the file cannot be parsed, so this is usable as a
@@ -65,6 +68,7 @@ fn parse_args(args : Array[String]) -> (Subcommand, String?) {
       "--commands" | "-c" => mode = Commands
       "--symbols" | "-s" => mode = Symbols
       "--sections" | "-S" => mode = Sections
+      "--signature" | "-g" => mode = Signature
       _ => path = Some(arg)
     }
   }
@@ -130,11 +134,71 @@ fn main {
 }
 
 ///|
+/// Finds the signature region, reporting the reason when there is none.
+fn try_signature(
+  slice : @lib.MachSlice,
+  arch : String,
+) -> @lib.SignatureRegion? {
+  let result = Ok(@lib.signature_region(slice)) catch { e => Err(e) }
+  match result {
+    Ok(Some(r)) => Some(r)
+    Ok(None) => {
+      println("\{arch}: not signed")
+      None
+    }
+    Err(e) => {
+      println("\{arch}: cannot read signature: \{e.to_string()}")
+      None
+    }
+  }
+}
+
+///|
+/// Reads the code directory, reporting the reason when it is missing.
+fn read_code_directory(
+  slice : @lib.MachSlice,
+  region : @lib.SignatureRegion,
+  arch : String,
+) -> @lib.CodeDirectory? {
+  let result = Ok(@lib.code_directory(slice, region)) catch { e => Err(e) }
+  match result {
+    Ok(Some(d)) => Some(d)
+    Ok(None) => None
+    Err(e) => {
+      println("\{arch}: cannot read code directory: \{e.to_string()}")
+      None
+    }
+  }
+}
+
+///|
 /// Prints one or more slices in the requested mode.
 fn report(slices : Array[(String, @lib.MachSlice)], mode : Subcommand) -> Unit {
   for entry in slices {
     let (arch, slice) = entry
     match mode {
+      Signature => {
+        let region = match try_signature(slice, arch) {
+          Some(r) => r
+          None => continue
+        }
+        let cd = match read_code_directory(slice, region, arch) {
+          Some(d) => d
+          None => {
+            println("\{arch}: signature has no code directory")
+            continue
+          }
+        }
+        println("\{arch}:")
+        println("  identifier  \{cd.identifier}")
+        println("  version     0x\{@lib.hex(cd.version.to_int64())}")
+        println("  flags       0x\{@lib.hex(cd.flags.to_int64())}")
+        println("  hash        \{cd.hash_type}")
+        println("  slots       \{cd.code_slots}")
+        if cd.team_id != "" {
+          println("  team        \{cd.team_id}")
+        }
+      }
       Sections => {
         let segs = Ok(@lib.segments(slice)) catch { e => Err(e) }
         let segs = match segs {
