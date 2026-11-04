@@ -12,6 +12,8 @@ enum Subcommand {
   Header
   /// Print every load command with its offset and size.
   Commands
+  /// Print the symbol table.
+  Symbols
   /// Print usage.
   Help
 }
@@ -20,7 +22,10 @@ enum Subcommand {
 /// Equality on the mode, so `main` can branch on it.
 pub impl Eq for Subcommand with fn equal(a, b) {
   match (a, b) {
-    (Header, Header) | (Commands, Commands) | (Help, Help) => true
+    (Header, Header)
+    | (Commands, Commands)
+    | (Symbols, Symbols)
+    | (Help, Help) => true
     _ => false
   }
 }
@@ -37,6 +42,7 @@ const USAGE : String =
   #|Usage:
   #|  machscope <file>              summarize the header(s)
   #|  machscope --commands <file>   list load commands
+  #|  machscope --symbols <file>    list defined and undefined symbols
   #|  machscope --help              show this message
   #|
   #|Exit status is 1 when the file cannot be parsed, so this is usable as a
@@ -54,6 +60,7 @@ fn parse_args(args : Array[String]) -> (Subcommand, String?) {
     match arg {
       "--help" | "-h" => return (Help, None)
       "--commands" | "-c" => mode = Commands
+      "--symbols" | "-s" => mode = Symbols
       _ => path = Some(arg)
     }
   }
@@ -124,6 +131,24 @@ fn report(slices : Array[(String, @lib.MachSlice)], mode : Subcommand) -> Unit {
   for entry in slices {
     let (arch, slice) = entry
     match mode {
+      Symbols => {
+        let syms = Ok(@lib.symbols(slice)) catch { e => Err(e) }
+        let syms = match syms {
+          Ok(v) => v
+          Err(e) => {
+            println("\{arch}: cannot read symbols: \{e.to_string()}")
+            continue
+          }
+        }
+        println("\{arch}: \{syms.length()} symbol table entries")
+        for s in syms {
+          if s.is_debug() {
+            continue
+          }
+          let kind = if s.n_value == 0L && s.is_external() { "U" } else { "T" }
+          println("  \{@lib.hex(s.n_value)} \{kind} \{s.name}")
+        }
+      }
       Commands => {
         println("\{arch}: \{slice.commands.length()} load commands")
         for cmd in slice.commands {

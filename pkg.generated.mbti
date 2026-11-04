@@ -4,15 +4,37 @@ package "caassien/machscope"
 // Values
 pub const CPU_SUBTYPE_MASK : Int64 = 0xFF00_0000
 
+pub const LC_DYSYMTAB : UInt32 = 0xB
+
+pub const LC_SEGMENT : UInt32 = 0x1
+
+pub const LC_SEGMENT_64 : UInt32 = 0x19
+
+pub const LC_SYMTAB : UInt32 = 0x2
+
+pub const N_EXT : UInt32 = 0x01
+
+pub const N_STAB : UInt32 = 0xE0
+
+pub const N_TYPE : UInt32 = 0x0E
+
+pub fn find_symtab(MachSlice) -> SymtabCommand? raise MachscopeError
+
 pub fn hex(Int64) -> String
 
 pub fn parse(Bytes) -> MachFile raise MachscopeError
 
 pub fn parse_slice(Bounds, Int64) -> MachSlice raise MachscopeError
 
+pub fn string_table_entry(MachSlice, SymtabCommand, UInt32) -> String raise MachscopeError
+
 pub fn subtype_base(Int64) -> Int64
 
 pub fn subtype_capabilities(Int64) -> Int64
+
+pub fn symbols(MachSlice) -> Array[Symbol] raise MachscopeError
+
+pub fn symtab_command(MachSlice, RawCommand) -> SymtabCommand raise MachscopeError
 
 // Errors
 pub(all) suberror MachscopeError {
@@ -108,6 +130,24 @@ pub(all) struct RawCommand {
   cmd : UInt32
   size : UInt32
   offset : Int64
+}
+
+pub(all) struct Symbol {
+  name : String
+  n_type : UInt32
+  n_sect : UInt32
+  n_desc : UInt32
+  n_value : Int64
+}
+pub fn Symbol::is_debug(Self) -> Bool
+pub fn Symbol::is_external(Self) -> Bool
+pub fn Symbol::kind(Self) -> UInt32
+
+pub(all) struct SymtabCommand {
+  symoff : Int64
+  nsyms : UInt32
+  stroff : Int64
+  strsize : UInt32
 }
 
 // Type aliases
