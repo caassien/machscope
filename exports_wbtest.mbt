@@ -77,7 +77,10 @@ test "oracle: exported addresses agree with the symbol table" {
   for e in trie {
     for s in syms {
       if s.name == e.name && !s.is_debug() && s.n_value != 0L {
-        inspect(s.n_value, content=(base + e.address.reinterpret_as_int64()).to_string())
+        inspect(
+          s.n_value,
+          content=(base + e.address.reinterpret_as_int64()).to_string(),
+        )
         checked = checked + 1
       }
     }
