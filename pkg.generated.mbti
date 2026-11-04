@@ -1,0 +1,115 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "caassien/machscope"
+
+// Values
+pub const CPU_SUBTYPE_MASK : Int64 = 0xFF00_0000
+
+pub fn hex(Int64) -> String
+
+pub fn parse(Bytes) -> MachFile raise MachscopeError
+
+pub fn parse_slice(Bounds, Int64) -> MachSlice raise MachscopeError
+
+pub fn subtype_base(Int64) -> Int64
+
+pub fn subtype_capabilities(Int64) -> Int64
+
+// Errors
+pub(all) suberror MachscopeError {
+  UnexpectedEnd(offset~ : Int64, needed~ : Int64, available~ : Int64)
+  BadMagic(magic~ : UInt32)
+  BadValue(field~ : String, value~ : Int64)
+  OutOfBounds(what~ : String, offset~ : Int64, size~ : Int64, limit~ : Int64)
+  BadName(offset~ : Int64)
+  Inconsistent(what~ : String, detail~ : String)
+  LimitExceeded(what~ : String, limit~ : Int64)
+  Unsupported(what~ : String)
+}
+pub fn MachscopeError::output(Self, &Logger) -> Unit
+pub fn MachscopeError::to_string(Self) -> String
+pub impl Show for MachscopeError
+
+// Types and methods
+pub(all) struct Bounds {
+  bytes : Bytes
+  start : Int64
+  limit : Int64
+}
+pub fn Bounds::fixed_name(Self, Int64, Int64, String) -> String raise MachscopeError
+pub fn Bounds::length(Self) -> Int64
+pub fn Bounds::of_bytes(Bytes) -> Self
+pub fn Bounds::read_i32(Self, Cursor) -> (Int64, Cursor) raise MachscopeError
+pub fn Bounds::read_i8(Self, Cursor) -> (Int64, Cursor) raise MachscopeError
+pub fn Bounds::read_u16(Self, Cursor) -> (UInt32, Cursor) raise MachscopeError
+pub fn Bounds::read_u32(Self, Cursor) -> (UInt32, Cursor) raise MachscopeError
+pub fn Bounds::read_u64(Self, Cursor) -> (Int64, Cursor) raise MachscopeError
+pub fn Bounds::read_u8(Self, Cursor) -> (UInt32, Cursor) raise MachscopeError
+pub fn Bounds::require(Self, Int64, Int64, String) -> Unit raise MachscopeError
+pub fn Bounds::slice(Self, Int64, Int64, String) -> Bytes raise MachscopeError
+
+pub(all) struct Cursor {
+  pos : Int64
+  endian : Endian
+}
+
+pub(all) enum Endian {
+  Little
+  Big
+}
+pub fn Endian::tag(Self) -> String
+
+pub(all) struct FatSlice {
+  cpu_type : Int64
+  cpu_subtype : Int64
+  offset : Int64
+  size : Int64
+  align : UInt32
+  image : MachSlice
+}
+pub fn FatSlice::cpu_capabilities(Self) -> Int64
+pub fn FatSlice::cpu_subtype_base(Self) -> Int64
+
+pub(all) enum MachFile {
+  Thin(MachSlice)
+  Fat(Array[FatSlice])
+}
+
+pub(all) struct MachHeader {
+  kind : MachKind
+  cpu_type : Int64
+  cpu_subtype : Int64
+  file_type : UInt32
+  ncmds : UInt32
+  sizeofcmds : UInt32
+  flags : UInt32
+  reserved : UInt32
+}
+pub fn MachHeader::cpu_capabilities(Self) -> Int64
+pub fn MachHeader::cpu_subtype_base(Self) -> Int64
+pub fn MachHeader::describe(Self) -> String
+
+pub(all) enum MachKind {
+  Mach64
+  Mach32
+  Mach64Be
+  Mach32Be
+}
+pub fn MachKind::endian(Self) -> Endian
+pub fn MachKind::header_size(Self) -> Int64
+pub fn MachKind::pointer_size(Self) -> Int32
+
+pub(all) struct MachSlice {
+  header : MachHeader
+  commands : Array[RawCommand]
+  bounds : Bounds
+}
+
+pub(all) struct RawCommand {
+  cmd : UInt32
+  size : UInt32
+  offset : Int64
+}
+
+// Type aliases
+
+// Traits

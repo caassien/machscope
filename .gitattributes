@@ -1,0 +1,3 @@
+# Fixtures are binary test inputs; never let git rewrite their line endings or
+# attempt a textual diff, which would silently change the bytes under test.
+internal/fixtures/*.macho -text -diff

@@ -1,0 +1,16 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "caassien/machscope/cmd/main"
+
+// Values
+
+// Errors
+
+// Types and methods
+type Subcommand
+pub fn Subcommand::equal(Self, Self) -> Bool
+pub fn Subcommand::not_equal(Self, Self) -> Bool
+pub impl Eq for Subcommand
+
+// Type aliases
+
+// Traits
