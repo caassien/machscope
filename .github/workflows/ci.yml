@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux is the interesting case: it has no otool and no Mach-O
+        # toolchain, so it proves the parser stands on its own. macOS is
+        # included because that is where the fixtures came from.
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> $GITHUB_PATH
+
+      - name: Show toolchain versions
+        run: |
+          moon version --all
+          moonc -v
+
+      - name: Update dependencies
+        run: moon update
+
+      - name: Check formatting
+        run: moon fmt --check
+
+      - name: Check
+        run: moon check --deny-warn
+
+      - name: Test
+        run: moon test
+
+      - name: Build CLI
+        run: moon build cmd/main

@@ -1,0 +1,7 @@
+import {
+}
+
+import {
+  "moonbitlang/core/env",
+  "moonbitlang/x/fs",
+} for "wbtest"
