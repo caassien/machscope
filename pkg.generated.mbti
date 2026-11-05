@@ -80,6 +80,8 @@ pub fn export_trie(MachSlice) -> ExportTrieRegion? raise MachscopeError
 
 pub fn exports(MachSlice) -> Array[Export] raise MachscopeError
 
+pub fn file_lookup_report(MachFile, Int64) -> Json raise MachscopeError
+
 pub fn file_offset_of_address(Array[Segment], Int64) -> Int64?
 
 pub fn file_report(MachFile, segments_? : Bool, symbols_? : Bool, exports_? : Bool) -> Json raise MachscopeError
@@ -109,6 +111,8 @@ pub fn segments(MachSlice) -> Array[Segment] raise MachscopeError
 pub fn signature_blobs(MachSlice, SignatureRegion) -> Array[SignatureBlobRef] raise MachscopeError
 
 pub fn signature_region(MachSlice) -> SignatureRegion? raise MachscopeError
+
+pub fn slice_lookup_report(MachSlice, Int64) -> Json raise MachscopeError
 
 pub fn slice_report(MachSlice, segments_? : Bool, symbols_? : Bool, exports_? : Bool) -> Json raise MachscopeError
 

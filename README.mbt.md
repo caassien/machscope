@@ -60,6 +60,28 @@ $ moon run cmd/main -- --signature internal/fixtures/ls.x86_64.macho
 | Chained fixups, rebase/bind opcodes | planned |
 | `.debug_info` variable and type lookup | planned |
 
+## How it is laid out
+
+```
+machscope.mbt      errors, byte order, the cursor type
+reader.mbt         bounds-checked reads of every primitive
+macho.mbt          magic numbers, fat tables, mach_header, command framing
+commands.mbt       LC_SYMTAB and the symbol table
+segments.mbt       LC_SEGMENT_64, sections, address ↔ offset
+exports.mbt        dyld export trie
+signature.mbt      superblob index, CodeDirectory, entitlements
+der.mbt            the DER subset needed to reach a plist
+dwarf.mbt          line program prologues, LEB128
+dwarf_line.mbt     the line-number state machine, address lookup
+json_report.mbt    Json values for every structure
+cmd/main/          the CLI
+bench/             timing harness
+```
+
+`reader.mbt` is the only file that indexes a buffer. Everything above it works
+through `Bounds` and `Cursor`, which is what keeps a malformed length from
+turning into an out-of-range read anywhere else.
+
 ## Design notes
 
 Every field read goes through a bounds-checked cursor. A corrupt file yields a

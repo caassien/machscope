@@ -160,6 +160,72 @@ test "json: segments are omitted unless asked for" {
 }
 
 ///|
+test "json: a lookup reports the source position dwarfdump gives" {
+  let j = file_lookup_report(
+    parse(fixture_bytes("sample.dsym")),
+    0x1_0000_0490L,
+  )
+  let locations = match j {
+    Object(m) =>
+      match m.get("lookup") {
+        Some(Array(archs)) =>
+          match archs[0] {
+            Object(a) =>
+              match a.get("locations") {
+                Some(Array(list)) => list
+                _ => fail("no locations")
+              }
+            _ => fail("lookup entry is not an object")
+          }
+        _ => fail("no lookup key")
+      }
+    _ => fail("report is not an object")
+  }
+  inspect(locations.length(), content="1")
+  match locations[0] {
+    Object(m) => {
+      match m.get("file") {
+        Some(String(f)) => inspect(f, content="t.c")
+        _ => fail("no file")
+      }
+      match m.get("line") {
+        Some(Number(n, ..)) => inspect(n.to_int(), content="3")
+        _ => fail("no line")
+      }
+      match m.get("column") {
+        Some(Number(n, ..)) => inspect(n.to_int(), content="33")
+        _ => fail("no column")
+      }
+    }
+    _ => fail("location is not an object")
+  }
+}
+
+///|
+test "json: an address with no line information reports an empty list" {
+  // The key is present with an empty array, so a caller can distinguish "asked
+  // and got nothing" from "never asked".
+  let j = file_lookup_report(parse(fixture_bytes("sample.dsym")), 0x100L)
+  let locations = match j {
+    Object(m) =>
+      match m.get("lookup") {
+        Some(Array(archs)) =>
+          match archs[0] {
+            Object(a) =>
+              match a.get("locations") {
+                Some(Array(list)) => list
+                _ => fail("no locations key")
+              }
+            _ => fail("lookup entry is not an object")
+          }
+        _ => fail("no lookup key")
+      }
+    _ => fail("report is not an object")
+  }
+  inspect(locations.length(), content="0")
+}
+
+///|
 test "json: the report round-trips through the parser" {
   // Serializing and re-parsing proves the output is valid JSON, not merely
   // a string that looks like it.

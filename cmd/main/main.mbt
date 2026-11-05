@@ -156,12 +156,16 @@ fn main {
   }
   if as_json {
     let report = Ok(
-      @lib.file_report(
-        parsed,
-        segments_=mode == Sections,
-        symbols_=mode == Symbols,
-        exports_=mode == Exports,
-      ),
+      match mode {
+        Lookup(addr) => @lib.file_lookup_report(parsed, addr)
+        _ =>
+          @lib.file_report(
+            parsed,
+            segments_=mode == Sections,
+            symbols_=mode == Symbols,
+            exports_=mode == Exports,
+          )
+      },
     ) catch {
       e => Err(e)
     }
@@ -171,11 +175,6 @@ fn main {
         println("machscope: \{file}: \{e.to_string()}")
         return
       }
-    }
-    // `--lookup` has no JSON form yet; the report above still carries the
-    // header, which is what a caller piping to a tool needs.
-    if mode is Lookup(_) {
-      return
     }
     return
   }
