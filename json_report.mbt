@@ -171,6 +171,11 @@ pub fn Fixup::to_json(self : Fixup) -> Json {
   fields["library_ordinal"] = Json::number(
     self.library_ordinal.to_int64().to_double(),
   )
+  if self.has_discriminator {
+    fields["auth"] = Json::boolean(true)
+    fields["key"] = Json::number(self.key.to_int64().to_double())
+    fields["diversity"] = Json::number(self.diversity.to_int64().to_double())
+  }
   Json::object(fields)
 }
 

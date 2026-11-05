@@ -252,6 +252,9 @@ pub(all) struct Fixup {
   import_index : Int64?
   symbol : String?
   library_ordinal : UInt32
+  key : UInt32
+  diversity : UInt32
+  has_discriminator : Bool
 }
 pub fn Fixup::is_bind(Self) -> Bool
 pub fn Fixup::to_json(Self) -> Json

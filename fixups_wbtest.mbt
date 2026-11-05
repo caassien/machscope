@@ -96,17 +96,46 @@ test "oracle: ls.arm64e names its imports even though its chains are undecoded" 
 }
 
 ///|
-test "arm64e chains are reported as unsupported rather than guessed at" {
-  // Returning one fixup where there are 114 would be worse than an error: a
-  // caller cannot tell a short answer from a wrong one.
+test "oracle: every arm64e fixup address matches dyld_info" {
+  // `dyld_info -fixups ls.arm64e.macho` lists 113 addresses across two
+  // segments, using the authenticated pointer format whose stride counts in
+  // 8-byte slots rather than 4-byte words.
   let slice = match parse(fixture_bytes("ls.arm64e.macho")) {
     Thin(s) => s
     Fat(_) => fail("expected thin")
   }
-  let outcome = Ok(fixups(slice)) catch { e => Err(e) }
-  match outcome {
-    Ok(_) => fail("expected an Unsupported error for arm64e chains")
-    Err(_) => ()
+  let addrs : Map[Int64, Bool] = Map([])
+  for f in fixups(slice) {
+    addrs[f.address] = true
+  }
+  inspect(addrs.length(), content="113")
+  // The first and last, read from dyld_info's output.
+  if !addrs.contains(4295000064L) {
+    fail("missing the first auth-bind at 0x100008000")
+  }
+  if !addrs.contains(4295016456L) {
+    fail("missing the last fixup at 0x10000c008")
+  }
+}
+
+///|
+test "oracle: arm64e auth-binds carry their signing key and diversity" {
+  // `dyld_info` prints `div=0x0000 ad=1 key=IA` for these; the same slots must
+  // report key 0, diversity 0 and a discriminator.
+  let slice = match parse(fixture_bytes("ls.arm64e.macho")) {
+    Thin(s) => s
+    Fat(_) => fail("expected thin")
+  }
+  let mut auth_binds = 0
+  for f in fixups(slice) {
+    if f.is_bind() && f.has_discriminator {
+      auth_binds = auth_binds + 1
+      inspect(f.key.to_int64(), content="0")
+      inspect(f.diversity.to_int64(), content="0")
+    }
+  }
+  if auth_binds == 0 {
+    fail("expected authenticated binds")
   }
 }
 

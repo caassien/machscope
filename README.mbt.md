@@ -57,8 +57,7 @@ $ moon run cmd/main -- --signature internal/fixtures/ls.x86_64.macho
 | CLI: `header`, `--commands`, `--symbols`, `--sections`, `--signature`, `--exports`, `--fixups`, `--lookup` | done |
 | `--json` output for every mode | done |
 | dyld export trie | done |
-| Chained fixups (`PTR_64`, `PTR_64_OFFSET`) | done |
-| Chained fixups for arm64e authenticated pointers | planned |
+| Chained fixups: `PTR_64`, `PTR_64_OFFSET`, arm64e authenticated | done |
 | `.debug_info` variable and type lookup | planned |
 
 ## How it is laid out
@@ -107,6 +106,24 @@ t.c:3:33
 `dwarfdump --debug-line` reports the same address as line 3, column 33. The
 path comes from the line program's directory and file tables, which DWARF 5
 encodes as form descriptions rather than plain strings.
+
+## Chained fixups
+
+Modern binaries put each rebase and bind in the slot it patches, with the
+distance to the next slot packed alongside. Both the plain 64-bit formats and
+the arm64e authenticated ones are decoded; the latter carry a signing key, a
+diversity value and an address discriminator in the bits the plain format uses
+for the import ordinal.
+
+```
+$ machscope --fixups internal/fixtures/ls.arm64e.macho
+internal/fixtures/ls.arm64e.macho: 113 fixups
+  0x100008000 bind _humanize_number (lib 1)
+  0x100008008 bind _tgetent (lib 2)
+  ...
+```
+
+All 113 addresses match `dyld_info -fixups` on that file.
 
 ## JSON output
 

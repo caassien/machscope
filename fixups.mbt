@@ -89,12 +89,113 @@ pub(all) struct Fixup {
   symbol : String?
   /// The library ordinal for a bind.
   library_ordinal : UInt32
+  /// For an arm64e authenticated pointer: which key signs the target.
+  key : UInt32
+  /// For an arm64e authenticated pointer: the diversity value mixed into the
+  /// signature. Two slots with the same target but different diversity cannot
+  /// be swapped.
+  diversity : UInt32
+  /// Whether the slot also carries an address discriminator bit.
+  has_discriminator : Bool
 }
 
 ///|
 /// Whether the fixup is a bind rather than a rebase.
 pub fn Fixup::is_bind(self : Fixup) -> Bool {
   self.import_index is Some(_)
+}
+
+///|
+/// A decoded chain slot, before it is given its address.
+priv enum SlotKind {
+  /// Points at an import: `(index, key, diversity, has_discriminator)`.
+  Bind(Int64, UInt32, UInt32, Bool)
+  /// Points inside the image: `(target, key, diversity, has_discriminator)`.
+  Rebase(Int64, UInt32, UInt32, Bool)
+}
+
+///|
+/// Decodes one slot according to its segment's pointer format.
+///
+/// The formats differ in where the bind flag lives, how wide the target is and
+/// whether an authentication signature is attached. A format this function does
+/// not know returns `None`, which the walk turns into an `Unsupported` error:
+/// guessing at a layout produces plausible-looking wrong addresses.
+fn decode_slot(raw : Int64, format : UInt32) -> SlotKind? {
+  match format {
+    // dyld_chained_ptr_64_bind / dyld_chained_ptr_64_rebase. The bind flag is
+    // the sign bit and the next stride is in the low 12 bits.
+    CHAINED_PTR_64 | CHAINED_PTR_64_OFFSET => {
+      let bind = (raw & 0x8000_0000_0000_0000L) != 0L
+      if bind {
+        // ordinal:24 at bit 0, reserved:8, next:12, bind:1.
+        Some(SlotKind::Bind(raw & 0x00FF_FFFFL, 0U, 0U, false))
+      } else {
+        // target:36 at bit 0, high8:8, reserved:7, next:12, bind:1.
+        Some(SlotKind::Rebase(raw & 0x0000_000F_FFFF_FFFFL, 0U, 0U, false))
+      }
+    }
+    // dyld_chained_ptr_arm64e_bind / _auth_bind / _rebase / _auth_rebase.
+    //
+    //   bit 63 auth, bit 62 bind, bits 51..61 next,
+    //   auth form: ordinal:16 at bit 0, zero:16, diversity:16,
+    //              addrDiv:1 at bit 48, key:2 at bit 49
+    //   plain form: ordinal:16 at bit 0, zero:16, high8:8 at bit 32
+    CHAINED_PTR_ARM64E | CHAINED_PTR_ARM64E_USERLAND => {
+      let auth = (raw & 0x8000_0000_0000_0000L) != 0L
+      let bind = (raw & 0x4000_0000_0000_0000L) != 0L
+      if bind {
+        if auth {
+          let import_index = raw & 0xFFFFL
+          let diversity = (raw >> 32) & 0xFFFFL
+          let discriminator = (raw >> 48) & 0x1L
+          let key = (raw >> 49) & 0x3L
+          Some(
+            SlotKind::Bind(
+              import_index,
+              key.to_int().reinterpret_as_uint(),
+              diversity.to_int().reinterpret_as_uint(),
+              discriminator != 0L,
+            ),
+          )
+        } else {
+          Some(SlotKind::Bind(raw & 0xFFFFL, 0U, 0U, false))
+        }
+      } else if auth {
+        // auth_rebase: target:32 at bit 0, diversity:16 at bit 32,
+        //              addrDiv:1 at bit 48, key:2 at bit 49.
+        let target = raw & 0xFFFF_FFFFL
+        let diversity = (raw >> 32) & 0xFFFFL
+        let discriminator = (raw >> 48) & 0x1L
+        let key = (raw >> 49) & 0x3L
+        Some(
+          SlotKind::Rebase(
+            target,
+            key.to_int().reinterpret_as_uint(),
+            diversity.to_int().reinterpret_as_uint(),
+            discriminator != 0L,
+          ),
+        )
+      } else {
+        // rebase: target:43 at bit 0, high8:8 at bit 43.
+        Some(SlotKind::Rebase(raw & 0x0000_07FF_FFFF_FFFFL, 0U, 0U, false))
+      }
+    }
+    _ => None
+  }
+}
+
+///|
+/// The distance in bytes from this slot to the next in its chain.
+///
+/// Arm64e counts the stride in 8-byte slots and the plain 64-bit formats in
+/// 4-byte words; using the wrong unit walks into the middle of a pointer.
+fn slot_stride(raw : Int64, format : UInt32) -> Int64 {
+  match format {
+    CHAINED_PTR_ARM64E | CHAINED_PTR_ARM64E_USERLAND =>
+      ((raw >> 51) & 0x7FFL) * 8L
+    _ => (raw & 0xFFFL) * 4L
+  }
 }
 
 ///|
@@ -315,17 +416,6 @@ pub fn fixups(slice : MachSlice) -> Array[Fixup] raise MachscopeError {
     if chains.segment_index >= segs.length().to_int64() {
       continue
     }
-    // The arm64e formats carry a key, a diversity value and an address
-    // discriminator in the bits the plain 64-bit format uses for the import
-    // ordinal. Decoding them needs the format-specific tables this version does
-    // not implement, so a chain in one of those segments is reported rather
-    // than walked into a wrong answer.
-    if chains.pointer_format == CHAINED_PTR_ARM64E {
-      raise Unsupported(what="arm64e authenticated fixup chains")
-    }
-    if chains.pointer_format == CHAINED_PTR_ARM64E_USERLAND {
-      raise Unsupported(what="arm64e userland fixup chains")
-    }
     let seg = segs[chains.segment_index.to_int()]
     // `page_size` is a byte count, not a log2 shift: the linker writes 0x4000
     // for a 16 KiB page. A zero means the segment is one run rather than pages.
@@ -342,7 +432,11 @@ pub fn fixups(slice : MachSlice) -> Array[Fixup] raise MachscopeError {
         continue
       }
       let page_base = seg.vmaddr + page.to_int64() * page_bytes
-      let mut slot_addr = page_base + start.to_int64() * 4L
+      // The page start is a byte offset into the page. The unit documented for
+      // older dyld versions is a 4-byte word, but the value written by the
+      // current linker is already in bytes: a page whose first fixup sits 8
+      // bytes in carries 8, not 2.
+      let mut slot_addr = page_base + start.to_int64()
       let mut steps = 0
       let mut walking = true
       while walking {
@@ -361,39 +455,45 @@ pub fn fixups(slice : MachSlice) -> Array[Fixup] raise MachscopeError {
         }
         let c = Cursor::{ pos: offset, endian: e, }
         let (raw, _) = b.read_u64(c)
-        let bind = (raw & 0x8000_0000_0000_0000L) != 0L
-        // The next slot's distance is in the low 12 bits, in 4-byte units.
-        let next = (raw & 0xFFFL) * 4L
-        if bind {
-          // Arm64e packs an authentication bit at the top and a 16-bit import
-          // ordinal at bit 32; the plain 64-bit format uses the same bit range
-          // for the ordinal. Reading from bit 48 in either case picks up the
-          // auth flag and reports an import index that does not exist.
-          let ordinal = (raw >> 32) & 0xFFL
-          let import_index = (raw >> 32) & 0xFFFFL
-          let (symbol, lib) = match lookup_import(index.imports, import_index) {
-            Some(imp) => (Some(imp.name), imp.library_ordinal)
-            None => (None, ordinal.to_int().reinterpret_as_uint())
-          }
-          out.push(Fixup::{
-            address: slot_addr,
-            target: 0L,
-            import_index: Some(import_index),
-            symbol,
-            library_ordinal: lib,
-          })
-        } else {
-          // A rebase: the target is the low 36 bits, either an address or an
-          // offset from the image base depending on the pointer format.
-          let target = raw & 0x0000_000F_FFFF_FFFFL
-          out.push(Fixup::{
-            address: slot_addr,
-            target,
-            import_index: None,
-            symbol: None,
-            library_ordinal: 0U,
-          })
+        let decoded = decode_slot(raw, chains.pointer_format)
+        match decoded {
+          Some(slot) =>
+            match slot {
+              SlotKind::Bind(import_index, key, diversity, has_discriminator) => {
+                let (symbol, lib) = match
+                  lookup_import(index.imports, import_index) {
+                  Some(imp) => (Some(imp.name), imp.library_ordinal)
+                  None => (None, import_index.to_int().reinterpret_as_uint())
+                }
+                out.push(Fixup::{
+                  address: slot_addr,
+                  target: 0L,
+                  import_index: Some(import_index),
+                  symbol,
+                  library_ordinal: lib,
+                  key,
+                  diversity,
+                  has_discriminator,
+                })
+              }
+              SlotKind::Rebase(target, key, diversity, has_discriminator) =>
+                out.push(Fixup::{
+                  address: slot_addr,
+                  target,
+                  import_index: None,
+                  symbol: None,
+                  library_ordinal: 0U,
+                  key,
+                  diversity,
+                  has_discriminator,
+                })
+            }
+          None => raise Unsupported(what="chained pointer format")
         }
+        // The next slot's distance is in the low bits; the unit differs by
+        // format, and arm64e counts in 8-byte slots where the 64-bit formats
+        // count in 4-byte words.
+        let next = slot_stride(raw, chains.pointer_format)
         if next == 0L {
           walking = false
         } else {
