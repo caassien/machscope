@@ -91,8 +91,9 @@ pub fn signature_region(
     let cur = Cursor::{ pos: body.start, endian: slice.header.kind.endian(), }
     let (dataoff, cur) = body.read_u32(cur)
     let (datasize, _) = body.read_u32(cur)
+    // `dataoff` is relative to the image, so a fat slice adds its own base.
     let region = SignatureRegion::{
-      offset: dataoff.to_int64(),
+      offset: slice.bounds.start + dataoff.to_int64(),
       size: datasize.to_int64(),
     }
     slice.bounds.require(region.offset, region.size, "code signature")

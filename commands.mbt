@@ -125,10 +125,15 @@ pub fn symtab_command(
   let (nsyms, cur) = body.read_u32(cur)
   let (stroff, cur) = body.read_u32(cur)
   let (strsize, _) = body.read_u32(cur)
+  // `symoff` and `stroff` are file offsets relative to the start of the image,
+  // not to the start of the file. In a thin image those are the same number; in
+  // a slice of a universal binary they differ by the slice's own offset, so the
+  // slice base has to be added or every name lookup lands in the wrong place.
+  let image_base = slice.bounds.start
   let symtab = SymtabCommand::{
-    symoff: symoff.to_int64(),
+    symoff: image_base + symoff.to_int64(),
     nsyms,
-    stroff: stroff.to_int64(),
+    stroff: image_base + stroff.to_int64(),
     strsize,
   }
   // Both tables must be readable, and the symbol table must fit: 16 bytes per

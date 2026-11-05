@@ -82,6 +82,8 @@ pub fn exports(MachSlice) -> Array[Export] raise MachscopeError
 
 pub fn file_offset_of_address(Array[Segment], Int64) -> Int64?
 
+pub fn file_report(MachFile, segments_? : Bool, symbols_? : Bool, exports_? : Bool) -> Json raise MachscopeError
+
 pub fn find_section(Array[Segment], String, String) -> Section?
 
 pub fn find_signed_data(Bytes) -> DerElement raise MachscopeError
@@ -107,6 +109,8 @@ pub fn segments(MachSlice) -> Array[Segment] raise MachscopeError
 pub fn signature_blobs(MachSlice, SignatureRegion) -> Array[SignatureBlobRef] raise MachscopeError
 
 pub fn signature_region(MachSlice) -> SignatureRegion? raise MachscopeError
+
+pub fn slice_report(MachSlice, segments_? : Bool, symbols_? : Bool, exports_? : Bool) -> Json raise MachscopeError
 
 pub fn string_table_entry(MachSlice, SymtabCommand, UInt32) -> String raise MachscopeError
 
@@ -191,6 +195,7 @@ pub(all) struct Export {
 pub fn Export::is_reexport(Self) -> Bool
 pub fn Export::is_weak(Self) -> Bool
 pub fn Export::kind(Self) -> UInt64
+pub fn Export::to_json(Self) -> Json
 
 pub(all) struct ExportTrieRegion {
   offset : Int64
@@ -249,6 +254,7 @@ pub(all) struct MachHeader {
 pub fn MachHeader::cpu_capabilities(Self) -> Int64
 pub fn MachHeader::cpu_subtype_base(Self) -> Int64
 pub fn MachHeader::describe(Self) -> String
+pub fn MachHeader::to_json(Self) -> Json
 
 pub(all) enum MachKind {
   Mach64
@@ -299,6 +305,7 @@ pub(all) struct Segment {
 }
 pub fn Segment::contains_address(Self, Int64) -> Bool
 pub fn Segment::contains_offset(Self, Int64) -> Bool
+pub fn Segment::to_json(Self) -> Json
 
 pub(all) struct SignatureBlobRef {
   slot : UInt32
@@ -317,6 +324,7 @@ pub(all) struct SourceLocation {
   line : UInt32
   column : UInt32
 }
+pub fn SourceLocation::to_json(Self) -> Json
 
 pub(all) struct Symbol {
   name : String
@@ -328,6 +336,7 @@ pub(all) struct Symbol {
 pub fn Symbol::is_debug(Self) -> Bool
 pub fn Symbol::is_external(Self) -> Bool
 pub fn Symbol::kind(Self) -> UInt32
+pub fn Symbol::to_json(Self) -> Json
 
 pub(all) struct SymtabCommand {
   symoff : Int64
