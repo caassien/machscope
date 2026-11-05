@@ -1,0 +1,9 @@
+import {
+  "caassien/machscope" @lib,
+  "moonbitlang/core/bench" @core_bench,
+  "moonbitlang/core/json",
+  "moonbitlang/core/env",
+  "moonbitlang/x/fs",
+}
+
+pkgtype(kind: "executable")
