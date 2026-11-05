@@ -139,6 +139,56 @@ pub fn slice_report(
 }
 
 ///|
+/// Builds an address-lookup report for one slice.
+///
+/// A lookup is reported as a list because a slice may carry more than one line
+/// program, and an address can legitimately resolve in more than one of them
+/// when a compilation unit was linked twice. An address that resolves nowhere
+/// reports the address with an empty list rather than omitting the key, so a
+/// caller can tell "no answer" from "not asked".
+pub fn slice_lookup_report(
+  slice : MachSlice,
+  addr : Int64,
+) -> Json raise MachscopeError {
+  let fields : Map[String, Json] = Map([])
+  fields["address"] = Json::string("0x\{hex(addr)}")
+  let locations : Array[Json] = []
+  for table in line_tables(slice, comp_dir="") {
+    match lookup_address(table, addr) {
+      Some(loc) => locations.push(loc.to_json())
+      None => ()
+    }
+  }
+  fields["locations"] = Json::array(locations)
+  Json::object(fields)
+}
+
+///|
+/// Builds an address-lookup report for a whole file.
+pub fn file_lookup_report(
+  file : MachFile,
+  addr : Int64,
+) -> Json raise MachscopeError {
+  let archs : Array[Json] = []
+  match file {
+    Thin(slice) => archs.push(slice_lookup_report(slice, addr))
+    Fat(slices) =>
+      for s in slices {
+        let fields = match slice_lookup_report(s.image, addr) {
+          Object(m) => m
+          _ => Map([])
+        }
+        fields["fat_cpu_type"] = Json::number(s.cpu_type.to_double())
+        fields["fat_offset"] = Json::number(s.offset.to_double())
+        archs.push(Json::object(fields))
+      }
+  }
+  let fields : Map[String, Json] = Map([])
+  fields["lookup"] = Json::array(archs)
+  Json::object(fields)
+}
+
+///|
 /// Builds a report for a whole file.
 ///
 /// A thin image reports `architectures` with one entry; a fat one reports each
