@@ -54,10 +54,11 @@ $ moon run cmd/main -- --signature internal/fixtures/ls.x86_64.macho
 | Embedded code signature: superblob, CodeDirectory | done |
 | Entitlements, reached through the PKCS#7 DER wrapper | done |
 | DWARF 5 line tables, address → `file:line:column` | done |
-| CLI: `header`, `--commands`, `--symbols`, `--sections`, `--signature`, `--exports`, `--lookup` | done |
+| CLI: `header`, `--commands`, `--symbols`, `--sections`, `--signature`, `--exports`, `--fixups`, `--lookup` | done |
 | `--json` output for every mode | done |
 | dyld export trie | done |
-| Chained fixups, rebase/bind opcodes | planned |
+| Chained fixups (`PTR_64`, `PTR_64_OFFSET`) | done |
+| Chained fixups for arm64e authenticated pointers | planned |
 | `.debug_info` variable and type lookup | planned |
 
 ## How it is laid out
@@ -69,6 +70,7 @@ macho.mbt          magic numbers, fat tables, mach_header, command framing
 commands.mbt       LC_SYMTAB and the symbol table
 segments.mbt       LC_SEGMENT_64, sections, address ↔ offset
 exports.mbt        dyld export trie
+fixups.mbt         chained fixups: imports, segment chains, rebase/bind
 signature.mbt      superblob index, CodeDirectory, entitlements
 der.mbt            the DER subset needed to reach a plist
 dwarf.mbt          line program prologues, LEB128

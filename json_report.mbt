@@ -102,6 +102,7 @@ pub fn slice_report(
   segments_~ : Bool = false,
   symbols_~ : Bool = false,
   exports_~ : Bool = false,
+  fixups_~ : Bool = false,
 ) -> Json raise MachscopeError {
   let fields : Map[String, Json] = Map([])
   fields["header"] = slice.header.to_json()
@@ -135,6 +136,41 @@ pub fn slice_report(
     }
     fields["exports"] = Json::array(exps)
   }
+  if fixups_ {
+    // A segment whose pointer format this version does not decode makes the
+    // walk raise; reporting the failure as a string keeps the rest of the
+    // report usable.
+    let list = Ok(fixups(slice)) catch { e => Err(e) }
+    match list {
+      Ok(items) => {
+        let arr : Array[Json] = []
+        for f in items {
+          arr.push(f.to_json())
+        }
+        fields["fixups"] = Json::array(arr)
+      }
+      Err(e) => fields["fixups_error"] = Json::string(e.to_string())
+    }
+  }
+  Json::object(fields)
+}
+
+///|
+/// One resolved fixup as a JSON object.
+pub fn Fixup::to_json(self : Fixup) -> Json {
+  let fields : Map[String, Json] = Map([])
+  fields["address"] = Json::string("0x\{hex(self.address)}")
+  fields["kind"] = Json::string(if self.is_bind() { "bind" } else { "rebase" })
+  match self.symbol {
+    Some(s) => fields["symbol"] = Json::string(s)
+    None => ()
+  }
+  if !self.is_bind() {
+    fields["target"] = Json::string("0x\{hex(self.target)}")
+  }
+  fields["library_ordinal"] = Json::number(
+    self.library_ordinal.to_int64().to_double(),
+  )
   Json::object(fields)
 }
 
@@ -199,11 +235,14 @@ pub fn file_report(
   segments_~ : Bool = false,
   symbols_~ : Bool = false,
   exports_~ : Bool = false,
+  fixups_~ : Bool = false,
 ) -> Json raise MachscopeError {
   let archs : Array[Json] = []
   match file {
     Thin(slice) =>
-      archs.push(slice_report(slice, segments_~, symbols_~, exports_~))
+      archs.push(
+        slice_report(slice, segments_~, symbols_~, exports_~, fixups_~),
+      )
     Fat(slices) =>
       for s in slices {
         // The slice's own placement in the file is merged into the same object
