@@ -33,7 +33,11 @@ pub impl Eq for Subcommand with fn equal(a, b) {
     (Header, Header)
     | (Commands, Commands)
     | (Symbols, Symbols)
+    | (Sections, Sections)
+    | (Signature, Signature)
+    | (Exports, Exports)
     | (Help, Help) => true
+    (Lookup(x), Lookup(y)) => x == y
     _ => false
   }
 }
@@ -79,6 +83,7 @@ fn parse_args(args : Array[String]) -> (Subcommand, String?) {
       "--signature" | "-g" => mode = Signature
       "--lookup" | "-l" => want_lookup = true
       "--exports" | "-e" => mode = Exports
+      "--json" => () // handled by wants_json; must not be taken as a path
       _ =>
         if arg.has_prefix("0x") {
           mode = Lookup(parse_hex(arg))
@@ -89,6 +94,17 @@ fn parse_args(args : Array[String]) -> (Subcommand, String?) {
   }
   let _ = want_lookup
   (mode, path)
+}
+
+///|
+/// Whether `--json` appears anywhere in the arguments.
+fn wants_json(args : Array[String]) -> Bool {
+  for arg in args {
+    if arg == "--json" {
+      return true
+    }
+  }
+  false
 }
 
 ///|
@@ -116,6 +132,7 @@ fn main {
     []
   }
   let (mode, path) = parse_args(args)
+  let as_json = wants_json(args)
   if mode == Help || path is None {
     println(USAGE)
     return
@@ -136,6 +153,31 @@ fn main {
       println("machscope: \{file}: \{e.to_string()}")
       return
     }
+  }
+  if as_json {
+    let report = Ok(
+      @lib.file_report(
+        parsed,
+        segments_=mode == Sections,
+        symbols_=mode == Symbols,
+        exports_=mode == Exports,
+      ),
+    ) catch {
+      e => Err(e)
+    }
+    match report {
+      Ok(j) => println(j.stringify(indent=2))
+      Err(e) => {
+        println("machscope: \{file}: \{e.to_string()}")
+        return
+      }
+    }
+    // `--lookup` has no JSON form yet; the report above still carries the
+    // header, which is what a caller piping to a tool needs.
+    if mode is Lookup(_) {
+      return
+    }
+    return
   }
   match parsed {
     @lib.Thin(slice) => report([(file, slice)], mode)

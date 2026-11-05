@@ -102,8 +102,10 @@ pub fn export_trie(slice : MachSlice) -> ExportTrieRegion? raise MachscopeError 
       let cur = Cursor::{ pos: body.start, endian: slice.header.kind.endian(), }
       let (off, cur) = body.read_u32(cur)
       let (size, _) = body.read_u32(cur)
+      // `fileoff` in a load command is relative to the image, so a fat slice
+      // has to add its own base. Thin images have base 0 and are unaffected.
       let region = ExportTrieRegion::{
-        offset: off.to_int64(),
+        offset: slice.bounds.start + off.to_int64(),
         size: size.to_int64(),
       }
       slice.bounds.require(region.offset, region.size, "export trie")
@@ -128,8 +130,10 @@ pub fn export_trie(slice : MachSlice) -> ExportTrieRegion? raise MachscopeError 
       if size == 0U {
         return None
       }
+      // `fileoff` in a load command is relative to the image, so a fat slice
+      // has to add its own base. Thin images have base 0 and are unaffected.
       let region = ExportTrieRegion::{
-        offset: off.to_int64(),
+        offset: slice.bounds.start + off.to_int64(),
         size: size.to_int64(),
       }
       slice.bounds.require(region.offset, region.size, "export trie")

@@ -19,7 +19,8 @@ both can run MoonBit.
 | Embedded code signature: superblob, CodeDirectory | done |
 | Entitlements, reached through the PKCS#7 DER wrapper | done |
 | DWARF 5 line tables, address → `file:line:column` | done |
-| CLI: `header`, `--commands`, `--symbols`, `--sections`, `--signature`, `--lookup` | done |
+| CLI: `header`, `--commands`, `--symbols`, `--sections`, `--signature`, `--exports`, `--lookup` | done |
+| `--json` output for every mode | done |
 | dyld export trie | done |
 | Chained fixups, rebase/bind opcodes | planned |
 | `.debug_info` variable and type lookup | planned |
@@ -47,6 +48,32 @@ t.c:3:33
 `dwarfdump --debug-line` reports the same address as line 3, column 33. The
 path comes from the line program's directory and file tables, which DWARF 5
 encodes as form descriptions rather than plain strings.
+
+## JSON output
+
+`--json` is accepted with any mode; the report always carries the header and
+the command table, and adds segments, symbols or exports when the corresponding
+flag is present. Thin and universal files produce the same shape, with the
+slice's placement in the file as extra `fat_*` keys.
+
+```
+$ machscope --json --exports sample.bin
+{
+  "architectures": [
+    {
+      "header": { "magic": "MH_MAGIC_64", ... },
+      "commands": [ ... ],
+      "exports": [
+        { "name": "_main", "offset": "0x478", "flags": 0, "weak": false,
+          "reexport": false }
+      ]
+    }
+  ]
+}
+```
+
+Addresses are hex strings rather than JSON numbers: a 64-bit address does not
+survive a round trip through a double.
 
 ## Usage
 
