@@ -2,6 +2,16 @@
 package "caassien/machscope"
 
 // Values
+pub const CHAINED_IMPORT_FORMAT : UInt32 = 1
+
+pub const CHAINED_PTR_64 : UInt32 = 2
+
+pub const CHAINED_PTR_64_OFFSET : UInt32 = 6
+
+pub const CHAINED_PTR_ARM64E : UInt32 = 1
+
+pub const CHAINED_PTR_ARM64E_USERLAND : UInt32 = 9
+
 pub const CPU_SUBTYPE_MASK : Int64 = 0xFF00_0000
 
 pub const CSMAGIC_CODEDIRECTORY : UInt32 = 0xFADE_0C02
@@ -25,6 +35,8 @@ pub const EXPORT_KIND_REGULAR : UInt64 = 0x00
 pub const EXPORT_KIND_THREAD_LOCAL : UInt64 = 0x01
 
 pub const LC_CODE_SIGNATURE : UInt32 = 0x1D
+
+pub const LC_DYLD_CHAINED_FIXUPS : UInt32 = 0x8000_0034
 
 pub const LC_DYLD_EXPORTS_TRIE : UInt32 = 0x8000_0033
 
@@ -66,6 +78,8 @@ pub const TAG_SET : UInt32 = 0x31
 
 pub const TAG_UTF8 : UInt32 = 0x0C
 
+pub fn chained_fixups(MachSlice) -> ChainedFixups? raise MachscopeError
+
 pub fn children(Bytes, DerElement) -> Array[DerElement] raise MachscopeError
 
 pub fn code_directory(MachSlice, SignatureRegion) -> CodeDirectory? raise MachscopeError
@@ -84,13 +98,15 @@ pub fn file_lookup_report(MachFile, Int64) -> Json raise MachscopeError
 
 pub fn file_offset_of_address(Array[Segment], Int64) -> Int64?
 
-pub fn file_report(MachFile, segments_? : Bool, symbols_? : Bool, exports_? : Bool) -> Json raise MachscopeError
+pub fn file_report(MachFile, segments_? : Bool, symbols_? : Bool, exports_? : Bool, fixups_? : Bool) -> Json raise MachscopeError
 
 pub fn find_section(Array[Segment], String, String) -> Section?
 
 pub fn find_signed_data(Bytes) -> DerElement raise MachscopeError
 
 pub fn find_symtab(MachSlice) -> SymtabCommand? raise MachscopeError
+
+pub fn fixups(MachSlice) -> Array[Fixup] raise MachscopeError
 
 pub fn hex(Int64) -> String
 
@@ -114,7 +130,7 @@ pub fn signature_region(MachSlice) -> SignatureRegion? raise MachscopeError
 
 pub fn slice_lookup_report(MachSlice, Int64) -> Json raise MachscopeError
 
-pub fn slice_report(MachSlice, segments_? : Bool, symbols_? : Bool, exports_? : Bool) -> Json raise MachscopeError
+pub fn slice_report(MachSlice, segments_? : Bool, symbols_? : Bool, exports_? : Bool, fixups_? : Bool) -> Json raise MachscopeError
 
 pub fn string_table_entry(MachSlice, SymtabCommand, UInt32) -> String raise MachscopeError
 
@@ -158,6 +174,19 @@ pub fn Bounds::read_u64(Self, Cursor) -> (Int64, Cursor) raise MachscopeError
 pub fn Bounds::read_u8(Self, Cursor) -> (UInt32, Cursor) raise MachscopeError
 pub fn Bounds::require(Self, Int64, Int64, String) -> Unit raise MachscopeError
 pub fn Bounds::slice(Self, Int64, Int64, String) -> Bytes raise MachscopeError
+
+pub(all) struct ChainedFixups {
+  version : UInt32
+  imports : Array[ChainedImport]
+  segments : Array[SegmentChains]
+}
+
+pub(all) struct ChainedImport {
+  name_offset : UInt32
+  name : String
+  library_ordinal : UInt32
+  weak : Bool
+}
 
 pub(all) struct CodeDirectory {
   magic : UInt32
@@ -216,6 +245,16 @@ pub(all) struct FatSlice {
 }
 pub fn FatSlice::cpu_capabilities(Self) -> Int64
 pub fn FatSlice::cpu_subtype_base(Self) -> Int64
+
+pub(all) struct Fixup {
+  address : Int64
+  target : Int64
+  import_index : Int64?
+  symbol : String?
+  library_ordinal : UInt32
+}
+pub fn Fixup::is_bind(Self) -> Bool
+pub fn Fixup::to_json(Self) -> Json
 
 pub(all) struct LineRow {
   address : Int64
@@ -310,6 +349,13 @@ pub(all) struct Segment {
 pub fn Segment::contains_address(Self, Int64) -> Bool
 pub fn Segment::contains_offset(Self, Int64) -> Bool
 pub fn Segment::to_json(Self) -> Json
+
+pub(all) struct SegmentChains {
+  segment_index : Int64
+  page_size : UInt32
+  pointer_format : UInt32
+  page_starts : Array[UInt32]
+}
 
 pub(all) struct SignatureBlobRef {
   slot : UInt32

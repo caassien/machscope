@@ -22,6 +22,8 @@ enum Subcommand {
   Lookup(Int64)
   /// Print exported symbols from the dyld export trie.
   Exports
+  /// Print chained fixups.
+  Fixups
   /// Print usage.
   Help
 }
@@ -60,6 +62,7 @@ const USAGE : String =
   #|  machscope --lookup <addr> <file>
   #|                                resolve an address to file:line
   #|  machscope --exports <file>    list exported symbols
+  #|  machscope --fixups <file>     list chained fixups
   #|  machscope --help              show this message
   #|
   #|Exit status is 1 when the file cannot be parsed, so this is usable as a
@@ -83,6 +86,7 @@ fn parse_args(args : Array[String]) -> (Subcommand, String?) {
       "--signature" | "-g" => mode = Signature
       "--lookup" | "-l" => want_lookup = true
       "--exports" | "-e" => mode = Exports
+      "--fixups" | "-f" => mode = Fixups
       "--json" => () // handled by wants_json; must not be taken as a path
       _ =>
         if arg.has_prefix("0x") {
@@ -164,6 +168,7 @@ fn main {
             segments_=mode == Sections,
             symbols_=mode == Symbols,
             exports_=mode == Exports,
+            fixups_=mode == Fixups,
           )
       },
     ) catch {
@@ -276,6 +281,29 @@ fn report(slices : Array[(String, @lib.MachSlice)], mode : Subcommand) -> Unit {
   for entry in slices {
     let (arch, slice) = entry
     match mode {
+      Fixups => {
+        let list = Ok(@lib.fixups(slice)) catch { e => Err(e) }
+        let list = match list {
+          Ok(v) => v
+          Err(e) => {
+            println("\{arch}: \{e.to_string()}")
+            continue
+          }
+        }
+        println("\{arch}: \{list.length()} fixups")
+        for f in list {
+          match f.symbol {
+            Some(sym) =>
+              println(
+                "  0x\{@lib.hex(f.address)} bind \{sym} (lib \{f.library_ordinal})",
+              )
+            None =>
+              println(
+                "  0x\{@lib.hex(f.address)} rebase -> 0x\{@lib.hex(f.target)}",
+              )
+          }
+        }
+      }
       Exports => {
         let list = match try_exports(slice, arch) {
           Some(l) => l
