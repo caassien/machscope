@@ -37,6 +37,20 @@ pub const CHAINED_PTR_ARM64E : UInt32 = 1
 pub const CHAINED_PTR_ARM64E_USERLAND : UInt32 = 9
 
 ///|
+/// `DYLD_CHAINED_PTR_ARM64E_USERLAND24`: identical to `_USERLAND` except the
+/// bind ordinal is 24 bits wide rather than 16.
+///
+/// This is the format current linkers emit for userland arm64e binaries, so
+/// leaving it out means every modern arm64e application fails with
+/// `Unsupported` at its first fixup. The value is 12.
+pub const CHAINED_PTR_ARM64E_USERLAND24 : UInt32 = 12
+
+///|
+/// `DYLD_CHAINED_PTR_ARM64E_FIRMWARE`: a firmware-only layout whose stride is
+/// 4 bytes rather than 8 and whose unauthenticated target is a vmaddr.
+pub const CHAINED_PTR_ARM64E_FIRMWARE : UInt32 = 10
+
+///|
 /// One import: a symbol, the library it comes from, and how weakly.
 pub(all) struct ChainedImport {
   /// Index into the fixup blob's symbol pool.
@@ -141,12 +155,23 @@ fn decode_slot(raw : Int64, format : UInt32) -> SlotKind? {
     //   auth form: ordinal:16 at bit 0, zero:16, diversity:16,
     //              addrDiv:1 at bit 48, key:2 at bit 49
     //   plain form: ordinal:16 at bit 0, zero:16, high8:8 at bit 32
-    CHAINED_PTR_ARM64E | CHAINED_PTR_ARM64E_USERLAND => {
+    //
+    // The `_USERLAND24` format keeps this layout and only widens the bind
+    // ordinal to 24 bits, so it is handled here with the width as a parameter
+    // rather than as a second copy of the branch.
+    CHAINED_PTR_ARM64E
+    | CHAINED_PTR_ARM64E_USERLAND
+    | CHAINED_PTR_ARM64E_USERLAND24 => {
+      let ordinal_mask = if format == CHAINED_PTR_ARM64E_USERLAND24 {
+        0xFF_FFFFL
+      } else {
+        0xFFFFL
+      }
       let auth = (raw & 0x8000_0000_0000_0000L) != 0L
       let bind = (raw & 0x4000_0000_0000_0000L) != 0L
       if bind {
         if auth {
-          let import_index = raw & 0xFFFFL
+          let import_index = raw & ordinal_mask
           let diversity = (raw >> 32) & 0xFFFFL
           let discriminator = (raw >> 48) & 0x1L
           let key = (raw >> 49) & 0x3L
@@ -159,7 +184,7 @@ fn decode_slot(raw : Int64, format : UInt32) -> SlotKind? {
             ),
           )
         } else {
-          Some(SlotKind::Bind(raw & 0xFFFFL, 0U, 0U, false))
+          Some(SlotKind::Bind(raw & ordinal_mask, 0U, 0U, false))
         }
       } else if auth {
         // auth_rebase: target:32 at bit 0, diversity:16 at bit 32,
@@ -192,8 +217,9 @@ fn decode_slot(raw : Int64, format : UInt32) -> SlotKind? {
 /// 4-byte words; using the wrong unit walks into the middle of a pointer.
 fn slot_stride(raw : Int64, format : UInt32) -> Int64 {
   match format {
-    CHAINED_PTR_ARM64E | CHAINED_PTR_ARM64E_USERLAND =>
-      ((raw >> 51) & 0x7FFL) * 8L
+    CHAINED_PTR_ARM64E
+    | CHAINED_PTR_ARM64E_USERLAND
+    | CHAINED_PTR_ARM64E_USERLAND24 => ((raw >> 51) & 0x7FFL) * 8L
     _ => (raw & 0xFFFL) * 4L
   }
 }
