@@ -20,85 +20,159 @@ fn signature_of(name : String) -> (MachSlice, SignatureRegion) raise {
 
 ///|
 test "oracle: the signature region matches otool's LC_CODE_SIGNATURE" {
-  // otool -l ls.arm64e.macho: dataoff 70240, datasize 18432.
-  let (_, region) = signature_of("ls.arm64e.macho")
-  inspect(region.offset, content="70240")
-  inspect(region.size, content="18432")
+  // otool -l sample.bin: LC_CODE_SIGNATURE dataoff 33456, datasize 416.
+  let (_, region) = signature_of("sample.bin")
+  inspect(region.offset, content="33456")
+  inspect(region.size, content="416")
 }
 
 ///|
-test "oracle: the superblob index holds code directory and entitlements" {
-  // The index has three entries: CSSLOT_CODEDIRECTORY (0), CSSLOT_REQUIREMENTS
-  // (2) and CSSLOT_ENTITLEMENTS (5).
-  let (slice, region) = signature_of("ls.arm64e.macho")
+test "oracle: the superblob index holds only the code directory" {
+  // `codesign -dvvv sample.bin` reports `flags=0x20002(adhoc,linker-signed)`
+  // and `Internal requirements=none`, and the index has exactly one entry:
+  // CSSLOT_CODEDIRECTORY (0). An ad-hoc signature from the linker carries no
+  // requirements blob, no CMS blob and no entitlements.
+  let (slice, region) = signature_of("sample.bin")
   let refs = signature_blobs(slice, region)
-  inspect(refs.length(), content="3")
+  inspect(refs.length(), content="1")
   inspect(refs[0].slot.to_int64(), content="0")
-  inspect(refs[1].slot.to_int64(), content="2")
-  inspect(refs[2].slot.to_int64(), content="65536") // 0x10000
-  // Only the entitlements slot carries the DER payload magic.
-  inspect(refs[2].magic.to_int64(), content="4208855809") // 0xfade0b01
+  inspect(refs[0].magic.to_int64(), content="4208856066") // 0xfade0c02
+  inspect(refs[0].length, content="389")
 }
 
 ///|
 test "oracle: the code directory matches codesign -dvv" {
-  // codesign -dvv: Identifier=com.apple.ls, CodeDirectory v=20400,
-  // flags=0x0(none), Platform identifier=26.
-  let (slice, region) = signature_of("ls.arm64e.macho")
+  // codesign -dvvv sample.bin: Identifier=sample.arm64, CodeDirectory v=20400,
+  // flags=0x20002(adhoc,linker-signed), hashes=9+0, Hash type=sha256 size=32,
+  // TeamIdentifier=not set.
+  let (slice, region) = signature_of("sample.bin")
   let cd = match code_directory(slice, region) {
     Some(d) => d
     None => fail("no code directory")
   }
-  inspect(cd.identifier, content="com.apple.ls")
+  inspect(cd.identifier, content="sample.arm64")
   inspect(cd.version.to_int64(), content="132096") // 0x20400
-  inspect(cd.flags.to_int64(), content="0")
+  inspect(cd.flags.to_int64(), content="131074") // 0x20002
   inspect(cd.magic.to_int64(), content="4208856066") // 0xfade0c02
-  // codesign reports `hashes=5+2`, i.e. 5 code slots and 2 special slots, and
-  // page size 2^14. The hash type is SHA-256, hash size 32.
-  inspect(cd.code_slots.to_int64(), content="5")
+  // codesign reports `hashes=9+0`, i.e. 9 code slots and no special slots.
+  // The hash type is SHA-256, hash size 32, and the page size is 2^12 (4 KiB),
+  // which is what clang's linker writes for these small images.
+  inspect(cd.code_slots.to_int64(), content="9")
   inspect(cd.hash_type.to_int64(), content="2")
   inspect(cd.hash_size.to_int64(), content="32")
-  inspect(cd.page_size.to_int64(), content="14")
-  // Apple ships an empty team id for platform binaries.
+  inspect(cd.page_size.to_int64(), content="12")
+  // `TeamIdentifier=not set`: an ad-hoc signature has no team id.
   inspect(cd.team_id, content="")
 }
 
 ///|
-test "oracle: several Apple binaries report their own bundle identifiers" {
-  // Each system binary signs under its own identifier; reading a shared offset
-  // would produce the same string for all of them.
-  let cases = [
-    ("ls.arm64e.macho", "com.apple.ls"),
-    ("ls.x86_64.macho", "com.apple.ls"),
-  ]
-  for pair in cases {
-    let (name, expected) = pair
-    let (slice, region) = signature_of(name)
-    let cd = match code_directory(slice, region) {
-      Some(d) => d
-      None => fail("no code directory in \{name}")
-    }
-    inspect(cd.identifier, content=expected)
+test "oracle: only the arm64 slice of the fat file is signed" {
+  // The linker applies its ad-hoc signature to arm64 images only, so the
+  // x86_64 image `make_fixtures.sh` produces carries no LC_CODE_SIGNATURE at
+  // all: `codesign -dvvv` on that slice says `code object is not signed at
+  // all`, and the arm64 slice reports `Identifier=sample.arm64`. Reading a
+  // shared offset would report the arm64 directory for both, so the two
+  // answers are asserted separately.
+  let slices = match parse(fixture_bytes("sample.fat")) {
+    Fat(s) => s
+    Thin(_) => fail("expected fat")
   }
+  inspect(signature_region(slices[0].image) is None, content="true")
+  let region = match signature_region(slices[1].image) {
+    Some(r) => r
+    None => fail("expected a signature on the arm64 slice")
+  }
+  let cd = match code_directory(slices[1].image, region) {
+    Some(d) => d
+    None => fail("no code directory in the arm64 slice")
+  }
+  inspect(cd.identifier, content="sample.arm64")
 }
 
 ///|
-test "entitlements: the DER walk reaches a plist for a signed binary" {
-  // Apple's platform binaries carry entitlements; the payload must decode to
-  // something that starts like a property list rather than being empty.
-  let (slice, region) = signature_of("ls.arm64e.macho")
-  let ents = entitlements_der(slice, region)
-  match ents {
-    Some(der) => {
-      // A non-empty payload that is valid DER: re-reading it must succeed.
-      // Apple wraps the plist in a context-tagged element, so the outer tag is
-      // not the SEQUENCE a bare plist would have.
-      inspect(der.length() > 0, content="true")
-      let top = read_element(der, 0L, der.length().to_int64())
-      inspect(top.next > 0L, content="true")
-      inspect(der.at(0).to_int() > 0x7F, content="true")
-    }
-    None => fail("expected entitlements in a signed system binary")
+test "entitlements: our own binary genuinely carries none" {
+  // `codesign -d --entitlements :- sample.bin` prints nothing: an ad-hoc
+  // linker-signed image has neither slot 5 nor slot 7. The previous version of
+  // this file asserted the opposite on an Apple binary and passed, because it
+  // was reading a signature blob rather than an entitlements blob.
+  let (slice, region) = signature_of("sample.bin")
+  let refs = signature_blobs(slice, region)
+  inspect(refs.length(), content="1")
+  inspect(entitlements(slice, region) is None, content="true")
+}
+
+///|
+test "entitlements: the DER payload decodes to the plist codesign reports" {
+  // entitlements.der was extracted from slot 7 of a binary signed with
+  // `codesign --entitlements entitled.plist`. `codesign -d --entitlements -`
+  // on that binary prints exactly the dictionary asserted here.
+  let plist = decode_der_plist(fixture_bytes("entitlements.der"))
+  inspect(
+    plist.get("com.apple.security.get-task-allow") is Some(Bool(true)),
+    content="true",
+  )
+  inspect(plist.get("com.example.counter") is Some(Int(42)), content="true")
+  inspect(
+    plist.get("com.example.label") is Some(Str("machscope")),
+    content="true",
+  )
+  inspect(
+    plist.get("com.example.list") is Some(Array([Str("a"), Int(7)])),
+    content="true",
+  )
+  inspect(
+    plist.get("com.example.nested") is Some(Dict([("inner", Str("deep"))])),
+    content="true",
+  )
+}
+
+///|
+test "entitlements: the DER plist has a version of 1" {
+  // Apple's wrapper is an application-tagged element holding an INTEGER
+  // version and then the dictionary. Reading the version as the value would
+  // yield `Int(1)` instead of a dictionary.
+  let plist = decode_der_plist(fixture_bytes("entitlements.der"))
+  inspect(plist is Dict(_), content="true")
+}
+
+///|
+test "entitlements: the XML payload is valid UTF-8 plist text" {
+  // Slot 5 holds the same dictionary as XML. It must decode as text and start
+  // with an XML declaration, which is what distinguishes it from the DER slot.
+  let text = @utf8.decode(fixture_bytes("entitlements.xml")) catch {
+    _ => fail("XML entitlements are not valid UTF-8")
+  }
+  inspect(text.has_prefix("<?xml version=\"1.0\""), content="true")
+  inspect(text.contains("<key>com.example.counter</key>"), content="true")
+}
+
+///|
+test "entitlements: a DER plist with a bad version is rejected" {
+  // The wrapper's version is INTEGER 1. Bumping it to 2 must fail rather than
+  // silently parsing a structure whose meaning has changed.
+  let bytes = fixture_bytes("entitlements.der")
+  let buf = Buffer()
+  for i in 0..<bytes.length() {
+    buf.write_byte(bytes.at(i))
+  }
+  let mutated = buf.to_bytes()
+  // The version integer is the third byte of the encoded wrapper: 70 81 ab 02 01 01 ...
+  let patched = Bytes::from_array([
+    b'\x70', b'\x81', b'\xab', b'\x02', b'\x01', b'\x02',
+  ])
+  let out = Buffer()
+  for i in 0..<patched.length() {
+    out.write_byte(patched.at(i))
+  }
+  for i in 6..<mutated.length() {
+    out.write_byte(mutated.at(i))
+  }
+  try {
+    ignore(decode_der_plist(out.to_bytes()))
+    fail("expected a rejection")
+  } catch {
+    BadValue(field~, ..) => inspect(field, content="DER plist version")
+    e => fail("unexpected error: \{e}")
   }
 }
 

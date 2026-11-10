@@ -18,6 +18,8 @@ enum Subcommand {
   Sections
   /// Print the code signature identity.
   Signature
+  /// Print the entitlements dictionary.
+  Entitlements
   /// Resolve an address to a source position.
   Lookup(Int64)
   /// Print exported symbols from the dyld export trie.
@@ -37,6 +39,7 @@ pub impl Eq for Subcommand with fn equal(a, b) {
     | (Symbols, Symbols)
     | (Sections, Sections)
     | (Signature, Signature)
+    | (Entitlements, Entitlements)
     | (Exports, Exports)
     | (Help, Help) => true
     (Lookup(x), Lookup(y)) => x == y
@@ -59,6 +62,8 @@ const USAGE : String =
   #|  machscope --symbols <file>    list defined and undefined symbols
   #|  machscope --sections <file>   list segments and their sections
   #|  machscope --signature <file>  show the code signature identity
+  #|  machscope --entitlements <file>
+  #|                                show the entitlements dictionary
   #|  machscope --lookup <addr> <file>
   #|                                resolve an address to file:line
   #|  machscope --exports <file>    list exported symbols
@@ -84,6 +89,7 @@ fn parse_args(args : Array[String]) -> (Subcommand, String?) {
       "--symbols" | "-s" => mode = Symbols
       "--sections" | "-S" => mode = Sections
       "--signature" | "-g" => mode = Signature
+      "--entitlements" | "-E" => mode = Entitlements
       "--lookup" | "-l" => want_lookup = true
       "--exports" | "-e" => mode = Exports
       "--fixups" | "-f" => mode = Fixups
@@ -357,6 +363,22 @@ fn report(slices : Array[(String, @lib.MachSlice)], mode : Subcommand) -> Unit {
         println("  slots       \{cd.code_slots}")
         if cd.team_id != "" {
           println("  team        \{cd.team_id}")
+        }
+      }
+      Entitlements => {
+        let region = match try_signature(slice, arch) {
+          Some(r) => r
+          None => continue
+        }
+        let ents = @lib.entitlements(slice, region) catch {
+          e => {
+            println("\{arch}: cannot read entitlements: \{e.to_string()}")
+            continue
+          }
+        }
+        match ents {
+          Some(e) => println("\{arch}: \{e.value.to_json().stringify()}")
+          None => println("\{arch}: no entitlements")
         }
       }
       Sections => {

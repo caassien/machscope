@@ -19,12 +19,35 @@ pub const CSMAGIC_EMBEDDED_SIGNATURE : UInt32 = 0xFADE_0CC0
 pub const CSMAGIC_CODEDIRECTORY : UInt32 = 0xFADE_0C02
 
 ///|
-/// The `CSSLOT_ENTITLEMENTS` index type: a DER-encoded entitlement plist.
+/// `CSSLOT_ENTITLEMENTS`: the entitlements payload as plist XML, uncompressed
+/// and not wrapped in CMS.
 ///
-/// The value is 5, but Apple's embedded signatures use slot 0x10000 for it; the
-/// two are distinct constants in `<Security/SecCode.h>` and only the latter
-/// appears in binaries produced by the current toolchain.
-pub const CSSLOT_ENTITLEMENTS : UInt32 = 0x0001_0000
+/// The value is 5. This slot carries `CSMAGIC_EMBEDDED_ENTITLEMENTS`.
+pub const CSSLOT_ENTITLEMENTS : UInt32 = 5
+
+///|
+/// `CSSLOT_DER_ENTITLEMENTS`: the same entitlements, DER-encoded.
+///
+/// The value is 7. Apple writes this slot alongside slot 5 so that a reader
+/// that understands DER does not have to parse XML; the two describe the same
+/// dictionary. A signature may carry either, or both.
+pub const CSSLOT_DER_ENTITLEMENTS : UInt32 = 7
+
+///|
+/// `CSSLOT_SIGNATURESLOT`: the CMS/PKCS#7 signature blob.
+///
+/// The value is 0x10000. This is a signature *over* the code directory. It
+/// holds no entitlements despite the `PKCS#7` in its name, which is what made
+/// an earlier version of this file look in the wrong place.
+pub const CSSLOT_SIGNATURESLOT : UInt32 = 0x0001_0000
+
+///|
+/// `CSMAGIC_EMBEDDED_ENTITLEMENTS`: an XML property list, uncompressed.
+pub const CSMAGIC_EMBEDDED_ENTITLEMENTS : UInt32 = 0xFADE_7171
+
+///|
+/// `CSMAGIC_EMBEDDED_DER_ENTITLEMENTS`: the same plist, DER-encoded.
+pub const CSMAGIC_EMBEDDED_DER_ENTITLEMENTS : UInt32 = 0xFADE_7172
 
 ///|
 /// Where the signature lives inside the file.
@@ -245,64 +268,93 @@ fn decode_code_directory(
 }
 
 ///|
-/// Extracts the entitlements plist from a signature, if there is one.
+/// The entitlements payload of a signature, as Apple stored it.
 ///
-/// The payload is DER-wrapped: a PKCS#7 `SignedData` whose entitlement
-/// attribute holds the property list. The returned bytes are the plist itself,
-/// not yet parsed.
-pub fn entitlements_der(
-  slice : MachSlice,
-  region : SignatureRegion,
-) -> Bytes? raise MachscopeError {
-  let refs = signature_blobs(slice, region)
-  let mut payload : Bytes? = None
-  for r in refs {
-    if r.slot != CSSLOT_ENTITLEMENTS {
-      continue
-    }
-    let base = region.offset + r.offset
-    // A blob is a magic, a length, then the payload.
-    let blob = slice.bounds.slice(base + 8L, r.length - 8L, "entitlements blob")
-    payload = Some(entitlements_from_blob(blob))
-  }
-  payload
+/// A signature may carry both forms; the DER one is returned preferentially
+/// because it is the form the platform reads first and the XML one may be a
+/// leftover from an earlier signing.
+pub(all) struct Entitlements {
+  /// The blob magic that was found: `CSMAGIC_EMBEDDED_ENTITLEMENTS` for XML,
+  /// `CSMAGIC_EMBEDDED_DER_ENTITLEMENTS` for DER.
+  magic : UInt32
+  /// The decoded property list.
+  value : Plist
 }
 
 ///|
-/// Walks a PKCS#7 blob down to the octet string holding the plist.
+/// Reads the entitlements of a signature, if it carries any.
 ///
-/// The layout is `ContentInfo > SignedData > [0] > encapContentInfo > [0] >
-/// OCTET STRING`. Each level is checked rather than indexed blindly, because a
-/// signature produced by a different tool may omit optional wrappers.
-fn entitlements_from_blob(blob : Bytes) -> Bytes raise MachscopeError {
-  let top = read_element(blob, 0L, blob.length().to_int64())
-  let mut found : Bytes? = None
-  let stack : Array[DerElement] = [top]
-  for _ in 0..<24 {
-    if stack.is_empty() || found is Some(_) {
-      break
+/// Entitlements appear in two slots: `CSSLOT_DER_ENTITLEMENTS` (7) holds the
+/// property list in Apple's DER encoding, and `CSSLOT_ENTITLEMENTS` (5) holds
+/// the same dictionary as plist XML. The DER form is preferred when both are
+/// present because it is what the platform reads, and because XML text is the
+/// form that survives a re-sign but no longer describes the running binary.
+///
+/// A blob in either slot is an eight-byte header — magic and length — followed
+/// by the payload. The `PKCS#7` blob at `CSSLOT_SIGNATURESLOT` is a signature
+/// over the code directory and is deliberately not consulted.
+///
+/// Returns `None` when the signature carries neither slot, which is the normal
+/// case for a binary signed without an entitlements file.
+pub fn entitlements(
+  slice : MachSlice,
+  region : SignatureRegion,
+) -> Entitlements? raise MachscopeError {
+  let refs = signature_blobs(slice, region)
+  let mut der : SignatureBlobRef? = None
+  let mut xml : SignatureBlobRef? = None
+  for r in refs {
+    let is_der = r.slot == CSSLOT_DER_ENTITLEMENTS &&
+      r.magic == CSMAGIC_EMBEDDED_DER_ENTITLEMENTS
+    let is_xml = r.slot == CSSLOT_ENTITLEMENTS &&
+      r.magic == CSMAGIC_EMBEDDED_ENTITLEMENTS
+    if is_der {
+      der = Some(r)
+    } else if is_xml {
+      xml = Some(r)
     }
-    let el = stack.pop().unwrap()
-    if el.tag == TAG_OCTET_STRING {
-      found = Some(octet_string(blob, el))
-    } else {
-      let constructed = el.tag == TAG_SEQUENCE ||
-        el.tag == TAG_SET ||
-        el.tag == TAG_CTX_0 ||
-        el.tag == TAG_CTX_1
-      if constructed {
-        for child in children(blob, el) {
-          stack.push(child)
-        }
+  }
+  match (der, xml) {
+    (Some(r), _) => {
+      let blob = blob_payload(slice, region, r, "DER entitlements")
+      Some(Entitlements::{ magic: r.magic, value: decode_der_plist(blob), })
+    }
+    (None, Some(r)) => {
+      let blob = blob_payload(slice, region, r, "entitlements")
+      // The XML form is returned as a string: decoding it into `Plist` here
+      // would mean shipping an XML parser, and a caller that wants the
+      // dictionary should prefer the DER slot, which this tree does.
+      let text = @utf8.decode(blob) catch {
+        _ =>
+          raise Inconsistent(
+            what="entitlements blob",
+            detail="XML payload is not valid UTF-8",
+          )
       }
+      Some(Entitlements::{ magic: r.magic, value: Str(text), })
     }
+    (None, None) => None
   }
-  match found {
-    Some(bytes) => bytes
-    None =>
-      raise Inconsistent(
-        what="entitlements blob",
-        detail="no octet string holding a plist",
-      )
+}
+
+///|
+/// Copies a blob's payload, excluding its eight-byte magic and length header.
+///
+/// The header's own length is checked against the superblob index so that a
+/// blob claiming more bytes than the index recorded is rejected instead of
+/// silently truncated.
+fn blob_payload(
+  slice : MachSlice,
+  region : SignatureRegion,
+  entry : SignatureBlobRef,
+  what : String,
+) -> Bytes raise MachscopeError {
+  if entry.length < 8L {
+    raise Inconsistent(what~, detail="blob is shorter than its own header")
   }
+  if entry.length > region.size {
+    raise Inconsistent(what~, detail="blob extends past the signature region")
+  }
+  let base = region.offset + entry.offset
+  slice.bounds.slice(base + 8L, entry.length - 8L, what)
 }
