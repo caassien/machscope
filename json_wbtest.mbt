@@ -52,7 +52,7 @@ test "json: a fat file reports one architecture per slice" {
         _ => fail("no fat_offset")
       }
       match m.get("fat_size") {
-        Some(Number(n, ..)) => inspect(n.to_int(), content="8872")
+        Some(Number(n, ..)) => inspect(n.to_int(), content="8816")
         _ => fail("no fat_size")
       }
       match m.get("fat_align") {
@@ -74,7 +74,7 @@ test "json: a fat file reports one architecture per slice" {
         _ => fail("no fat_offset")
       }
       match m.get("fat_size") {
-        Some(Number(n, ..)) => inspect(n.to_int(), content="33872")
+        Some(Number(n, ..)) => inspect(n.to_int(), content="33808")
         _ => fail("no fat_size")
       }
     }

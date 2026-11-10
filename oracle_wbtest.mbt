@@ -66,8 +66,8 @@ test "oracle: sample.arm64e header separates subtype from capability bits" {
 
 ///|
 test "oracle: sample.fat architecture table matches otool -f" {
-  // otool -f sample.fat: arch 0 x86_64 at 4096 size 8872 align 2^12,
-  //                      arch 1 arm64 at 16384 size 33872 align 2^14
+  // otool -f sample.fat: arch 0 x86_64 at 4096 size 8816 align 2^12,
+  //                      arch 1 arm64 at 16384 size 33808 align 2^14
   let slices = match parse(fixture_bytes("sample.fat")) {
     Fat(s) => s
     Thin(_) => fail("expected fat")
@@ -77,7 +77,7 @@ test "oracle: sample.fat architecture table matches otool -f" {
   inspect(slices[0].cpu_subtype_base(), content="3")
   inspect(slices[0].cpu_capabilities(), content="0")
   inspect(slices[0].offset, content="4096")
-  inspect(slices[0].size, content="8872")
+  inspect(slices[0].size, content="8816")
   inspect(slices[0].align.to_int64(), content="12")
   inspect(slices[1].cpu_type, content="16777228")
   // The fat table stores the capability bits inline, unlike `otool -f`, which
@@ -85,7 +85,7 @@ test "oracle: sample.fat architecture table matches otool -f" {
   inspect(slices[1].cpu_subtype_base(), content="0")
   inspect(slices[1].cpu_capabilities(), content="0")
   inspect(slices[1].offset, content="16384")
-  inspect(slices[1].size, content="33872")
+  inspect(slices[1].size, content="33808")
   inspect(slices[1].align.to_int64(), content="14")
 }
 

@@ -20,9 +20,9 @@ fn signature_of(name : String) -> (MachSlice, SignatureRegion) raise {
 
 ///|
 test "oracle: the signature region matches otool's LC_CODE_SIGNATURE" {
-  // otool -l sample.bin: LC_CODE_SIGNATURE dataoff 33456, datasize 416.
+  // otool -l sample.bin: LC_CODE_SIGNATURE dataoff 33392, datasize 416.
   let (_, region) = signature_of("sample.bin")
-  inspect(region.offset, content="33456")
+  inspect(region.offset, content="33392")
   inspect(region.size, content="416")
 }
 

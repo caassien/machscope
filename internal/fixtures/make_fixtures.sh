@@ -25,24 +25,44 @@ cd "$here"
 # deletes the object file it generated, and `dsymutil` below needs the debug map
 # in the binary to still resolve.
 #
-# `-fdebug-compilation-dir=.` records "." as the compilation directory instead
-# of the absolute path of whoever ran this script. Without it the committed
-# dSYM would carry a home directory name, which is both a small privacy leak and
-# a fixture that differs between machines.
-clang -arch arm64  -g -O0 -fdebug-compilation-dir=. -c -o sample.arm64.o  sample.c
-clang -arch x86_64 -g -O0 -fdebug-compilation-dir=. -c -o sample.x86_64.o sample.c
-clang -arch arm64  sample.arm64.o  -o sample.arm64
-clang -arch x86_64 sample.x86_64.o -o sample.x86_64
-lipo -create sample.arm64 sample.x86_64 -output sample.fat
-lipo -thin arm64  sample.fat -output sample.arm64.thin
-lipo -thin x86_64 sample.fat -output sample.x86_64.thin
+# Three flags pin the output so that a rebuild is byte-identical to what is
+# committed, and so that no fixture carries a path from the machine that built
+# it.
+#
+#   -fdebug-compilation-dir=.  records "." as the compilation directory rather
+#                              than an absolute path.
+#   -frandom-seed=machscope    pins the seed clang draws from the clock when it
+#                              names internal symbols.
+#   -Wl,-oso_prefix,.          makes the linker's `N_OSO` debug-map entry
+#                              relative. Without it that entry records the
+#                              object file's absolute path, which embeds the
+#                              builder's home directory in a committed and
+#                              published file.
+#
+# Note that the debug map is deliberately kept: the `N_OSO`/`N_SO`/`N_FUN`
+# entries it contributes are what the symbol-table tests decode, and stripping
+# them with `strip -S` would take that coverage away to solve a problem
+# `-oso_prefix` solves directly.
+#
+# LC_UUID is kept rather than suppressed. With `-frandom-seed` set, ld64
+# derives it deterministically from the contents, so it does not break
+# reproducibility, and `dyld_info` refuses to read a binary that lacks it.
+CLANG_FLAGS="-g -O0 -fdebug-compilation-dir=. -frandom-seed=machscope"
+LDFLAGS="-Wl,-oso_prefix,."
+
+build_thin() { # arch, object, output
+  clang -arch "$1" $CLANG_FLAGS -c -o "$2" sample.c
+  clang -arch "$1" $LDFLAGS "$2" -o "$3"
+}
+
+build_thin arm64  sample.arm64.o  sample.arm64
+build_thin x86_64 sample.x86_64.o sample.x86_64
 
 # `sample.arm64e`: the same program built for arm64e, which is what makes the
 # authenticated-pointer branch of `decode_slot` reachable. arm64e fixes up
 # imports through `__auth_got` with a signing key and a diversity value packed
 # into the slot; a plain arm64 build never produces one.
-clang -arch arm64e -g -O0 -fdebug-compilation-dir=. -c -o sample.arm64e.o sample.c
-clang -arch arm64e sample.arm64e.o -o sample.arm64e
+build_thin arm64e sample.arm64e.o sample.arm64e
 
 # The dSYM companion for the arm64 slice. `dsymutil` reads the debug map the
 # linker left in the binary and rewrites the DWARF into a standalone file, which
@@ -55,6 +75,10 @@ clang -arch arm64e sample.arm64e.o -o sample.arm64e
 # only works on Linux.
 dsymutil -o build.dSYM sample.arm64
 cp build.dSYM/Contents/Resources/DWARF/sample.arm64 sample.dsym
+
+lipo -create sample.arm64 sample.x86_64 -output sample.fat
+lipo -thin arm64  sample.fat -output sample.arm64.thin
+lipo -thin x86_64 sample.fat -output sample.x86_64.thin
 
 # `sample.bin` is the arm64 executable the dSYM belongs to.
 cp sample.arm64 sample.bin

@@ -52,9 +52,9 @@ test "oracle: segment addresses and sizes match otool -l" {
   inspect(segs[2].file_offset, content="16384")
   inspect(segs[2].file_size, content="16384")
   // __LINKEDIT: vmaddr 0x100008000, vmsize 0x4000, fileoff 32768,
-  // filesize 1104
+  // filesize 1040
   inspect(segs[3].vmaddr, content="4295000064")
-  inspect(segs[3].file_size, content="1104")
+  inspect(segs[3].file_size, content="1040")
   // __PAGEZERO maps a gigabyte of nothing and occupies no file bytes.
   inspect(segs[0].file_size, content="0")
   inspect(segs[0].vmsize, content="4294967296")
@@ -64,7 +64,7 @@ test "oracle: segment addresses and sizes match otool -l" {
 test "oracle: the x86_64 slice has its own segment layout" {
   // otool -l on the x86_64 slice of sample.fat: __TEXT vmsize 0x1000,
   // __DATA_CONST at 0x100001000, __LINKEDIT at 0x100002000 with
-  // filesize 680. Reading the arm64 slice's numbers for both would pass every
+  // filesize 624. Reading the arm64 slice's numbers for both would pass every
   // field check above, so the second architecture is asserted separately.
   let segs = slice_segments_of("sample.fat", 0)
   inspect(segs.length(), content="4")
@@ -77,7 +77,7 @@ test "oracle: the x86_64 slice has its own segment layout" {
   inspect(segs[2].file_offset, content="4096")
   inspect(segs[3].vmaddr, content="4294975488") // 0x100002000
   inspect(segs[3].file_offset, content="8192")
-  inspect(segs[3].file_size, content="680")
+  inspect(segs[3].file_size, content="624")
 }
 
 ///|
