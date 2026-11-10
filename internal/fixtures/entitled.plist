@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.get-task-allow</key><true/>
+	<key>com.example.counter</key><integer>42</integer>
+	<key>com.example.label</key><string>machscope</string>
+	<key>com.example.list</key><array><string>a</string><integer>7</integer></array>
+	<key>com.example.nested</key><dict><key>inner</key><string>deep</string></dict>
+</dict>
+</plist>

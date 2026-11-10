@@ -1,4 +1,9 @@
 // Differential tests for the segment and section table, against `otool -l`.
+//
+// The fixtures are `sample.bin` (the arm64 image) and the x86_64 slice of
+// `sample.fat`. Both were linked from `internal/fixtures/sample.c` by
+// `internal/fixtures/make_fixtures.sh`; the expected values are `otool -l`'s
+// output for those same files.
 
 ///|
 /// The segments of a thin fixture.
@@ -11,66 +16,104 @@ fn segments_of(name : String) -> Array[Segment] raise {
 }
 
 ///|
+/// The segments of one slice of a universal binary.
+fn slice_segments_of(name : String, index : Int32) -> Array[Segment] raise {
+  let slices = match parse(fixture_bytes(name)) {
+    Fat(s) => s
+    Thin(_) => fail("expected fat")
+  }
+  segments(slices[index].image)
+}
+
+///|
 test "oracle: segment names and order match otool -l" {
-  // otool -l lists __PAGEZERO, __TEXT, __DATA, __LINKEDIT in that order.
-  let segs = segments_of("ls.x86_64.macho")
+  // otool -l sample.bin lists __PAGEZERO, __TEXT, __DATA_CONST, __LINKEDIT
+  // in that order.
+  let segs = segments_of("sample.bin")
   inspect(segs.length(), content="4")
   inspect(segs[0].name, content="__PAGEZERO")
   inspect(segs[1].name, content="__TEXT")
-  inspect(segs[2].name, content="__DATA")
+  inspect(segs[2].name, content="__DATA_CONST")
   inspect(segs[3].name, content="__LINKEDIT")
 }
 
 ///|
 test "oracle: segment addresses and sizes match otool -l" {
-  let segs = segments_of("ls.x86_64.macho")
-  // __TEXT: vmaddr 0x100000000, vmsize 0x5000, fileoff 0, filesize 20480
+  let segs = segments_of("sample.bin")
+  // __TEXT: vmaddr 0x100000000, vmsize 0x4000, fileoff 0, filesize 16384
   inspect(segs[1].vmaddr, content="4294967296")
-  inspect(segs[1].vmsize, content="20480")
+  inspect(segs[1].vmsize, content="16384")
   inspect(segs[1].file_offset, content="0")
-  inspect(segs[1].file_size, content="20480")
-  // __DATA: vmaddr 0x100005000, vmsize 0x1000, fileoff 20480, filesize 4096
-  inspect(segs[2].vmaddr, content="4294987776")
-  inspect(segs[2].vmsize, content="4096")
-  inspect(segs[2].file_offset, content="20480")
-  inspect(segs[2].file_size, content="4096")
+  inspect(segs[1].file_size, content="16384")
+  // __DATA_CONST: vmaddr 0x100004000, vmsize 0x4000, fileoff 16384,
+  // filesize 16384
+  inspect(segs[2].vmaddr, content="4294983680")
+  inspect(segs[2].vmsize, content="16384")
+  inspect(segs[2].file_offset, content="16384")
+  inspect(segs[2].file_size, content="16384")
+  // __LINKEDIT: vmaddr 0x100008000, vmsize 0x4000, fileoff 32768,
+  // filesize 1104
+  inspect(segs[3].vmaddr, content="4295000064")
+  inspect(segs[3].file_size, content="1104")
   // __PAGEZERO maps a gigabyte of nothing and occupies no file bytes.
   inspect(segs[0].file_size, content="0")
   inspect(segs[0].vmsize, content="4294967296")
 }
 
 ///|
+test "oracle: the x86_64 slice has its own segment layout" {
+  // otool -l on the x86_64 slice of sample.fat: __TEXT vmsize 0x1000,
+  // __DATA_CONST at 0x100001000, __LINKEDIT at 0x100002000 with
+  // filesize 680. Reading the arm64 slice's numbers for both would pass every
+  // field check above, so the second architecture is asserted separately.
+  let segs = slice_segments_of("sample.fat", 0)
+  inspect(segs.length(), content="4")
+  inspect(segs[1].name, content="__TEXT")
+  inspect(segs[1].vmaddr, content="4294967296")
+  inspect(segs[1].vmsize, content="4096")
+  inspect(segs[1].file_size, content="4096")
+  inspect(segs[2].name, content="__DATA_CONST")
+  inspect(segs[2].vmaddr, content="4294971392") // 0x100001000
+  inspect(segs[2].file_offset, content="4096")
+  inspect(segs[3].vmaddr, content="4294975488") // 0x100002000
+  inspect(segs[3].file_offset, content="8192")
+  inspect(segs[3].file_size, content="680")
+}
+
+///|
 test "oracle: section names and addresses match otool -l" {
-  // The first six sections of __TEXT, in file order.
-  let segs = segments_of("ls.x86_64.macho")
+  // The sections of __TEXT, in file order.
+  let segs = segments_of("sample.bin")
   let text = segs[1]
-  inspect(text.sections.length(), content="6")
+  inspect(text.sections.length(), content="4")
   inspect(text.sections[0].name, content="__text")
-  inspect(text.sections[0].addr, content="4294969112") // 0x100000718
+  inspect(text.sections[0].addr, content="4294968416") // 0x100000460
+  inspect(text.sections[0].size, content="200") // 0xc8
   inspect(text.sections[1].name, content="__stubs")
-  inspect(text.sections[1].addr, content="4294984207") // 0x10000420f
-  inspect(text.sections[2].name, content="__stub_helper")
-  inspect(text.sections[3].name, content="__const")
-  inspect(text.sections[4].name, content="__cstring")
-  inspect(text.sections[5].name, content="__unwind_info")
+  inspect(text.sections[1].addr, content="4294968616") // 0x100000528
+  inspect(text.sections[2].name, content="__cstring")
+  inspect(text.sections[2].addr, content="4294968628") // 0x100000534
+  inspect(text.sections[3].name, content="__unwind_info")
+  inspect(text.sections[3].addr, content="4294968632") // 0x100000538
 }
 
 ///|
 test "oracle: section counts sum to the file's total" {
-  // `otool -l ls.x86_64.macho | grep -c sectname` is 12.
-  let segs = segments_of("ls.x86_64.macho")
+  // `otool -l sample.bin | grep -c sectname` is 5: four in __TEXT and one
+  // (__got) in __DATA_CONST.
+  let segs = segments_of("sample.bin")
   let mut total = 0
   for seg in segs {
     total = total + seg.sections.length()
   }
-  inspect(total, content="12")
+  inspect(total, content="5")
 }
 
 ///|
-test "oracle: section segment names repeat the enclosing segment" {
+test "sections: segment names repeat the enclosing segment" {
   // A section's own segname field must agree with the segment that owns it; a
   // parser that reads the wrong fixed offset would mix them up.
-  let segs = segments_of("ls.x86_64.macho")
+  let segs = segments_of("sample.bin")
   for seg in segs {
     for s in seg.sections {
       inspect(s.segment_name, content=seg.name)
@@ -80,7 +123,7 @@ test "oracle: section segment names repeat the enclosing segment" {
 
 ///|
 test "address to offset: a real section address maps into that section" {
-  let segs = segments_of("ls.x86_64.macho")
+  let segs = segments_of("sample.bin")
   let text = match find_section(segs, "__TEXT", "__text") {
     Some(s) => s
     None => fail("expected __TEXT,__text")
@@ -103,7 +146,7 @@ test "address to offset: a real section address maps into that section" {
 
 ///|
 test "address to offset: zero-fill addresses have no file bytes" {
-  let segs = segments_of("ls.x86_64.macho")
+  let segs = segments_of("sample.bin")
   // __PAGEZERO's filesize is 0, so every address in it must come back as None
   // rather than as an offset that would read unrelated file content.
   match file_offset_of_address(segs, 0x100L) {
@@ -121,7 +164,7 @@ test "address to offset: zero-fill addresses have no file bytes" {
 test "address to offset: the mapping is consistent with segment headers" {
   // For every segment with file bytes, the first byte of the segment maps to
   // fileoff, and the last byte maps to fileoff + filesize - 1.
-  let segs = segments_of("ls.x86_64.macho")
+  let segs = segments_of("sample.bin")
   for seg in segs {
     if seg.file_size == 0L {
       continue

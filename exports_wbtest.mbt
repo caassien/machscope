@@ -1,9 +1,9 @@
 // Differential tests for the export trie, against `dyld_info -exports`.
 //
 // The oracle prints each exported symbol's name and its offset from the image
-// base. `sample.bin` is the more interesting fixture: unlike the system
-// binaries, which export only the Mach header, it exports two functions whose
-// addresses the line-table tests also use.
+// base. `sample.bin` exports three symbols, which is more interesting than the
+// single `__mh_execute_header` a fully stripped system binary exports: the
+// names share a prefix and the trie therefore has more than one level.
 
 ///|
 /// The export trie of a thin fixture.
@@ -16,9 +16,9 @@ fn exports_of(name : String) -> Array[Export] raise {
 }
 
 ///|
-test "oracle: the region matches otool's LC_DYLD_INFO_ONLY" {
-  // otool -l ls.x86_64.macho: export_off 26224, export_size 32.
-  let slice = match parse(fixture_bytes("ls.x86_64.macho")) {
+test "oracle: the region matches otool's LC_DYLD_EXPORTS_TRIE" {
+  // otool -l sample.bin: LC_DYLD_EXPORTS_TRIE dataoff 32864, datasize 64.
+  let slice = match parse(fixture_bytes("sample.bin")) {
     Thin(s) => s
     Fat(_) => fail("expected thin")
   }
@@ -26,28 +26,16 @@ test "oracle: the region matches otool's LC_DYLD_INFO_ONLY" {
     Some(r) => r
     None => fail("expected an export trie")
   }
-  inspect(region.offset, content="26224")
-  inspect(region.size, content="32")
+  inspect(region.offset, content="32864")
+  inspect(region.size, content="64")
 }
 
 ///|
-test "oracle: a system binary exports exactly its Mach header" {
-  // dyld_info -exports prints one line: 0x00000000 __mh_execute_header.
-  let list = exports_of("ls.x86_64.macho")
-  inspect(list.length(), content="1")
-  inspect(list[0].name, content="__mh_execute_header")
-  inspect(list[0].address.reinterpret_as_int64(), content="0")
-  inspect(list[0].is_reexport(), content="false")
-  inspect(list[0].is_weak(), content="false")
-  inspect(list[0].kind().reinterpret_as_int64(), content="0") // EXPORT_SYMBOL_FLAGS_KIND_REGULAR
-}
-
-///|
-test "oracle: a compiled binary exports its functions with their offsets" {
+test "oracle: the export trie lists exactly dyld_info's three symbols" {
   // dyld_info -exports sample.bin:
-  //   0x00000000 __mh_execute_header
-  //   0x00000460 _helper
-  //   0x00000478 _main
+  //   0x00000000  __mh_execute_header
+  //   0x00000460  _compute
+  //   0x000004E0  _main
   let list = exports_of("sample.bin")
   inspect(list.length(), content="3")
   // The trie walk order is not the file order, so compare as a set by name.
@@ -56,12 +44,42 @@ test "oracle: a compiled binary exports its functions with their offsets" {
     by_name[e.name] = e.address.reinterpret_as_int64()
   }
   inspect(by_name["__mh_execute_header"], content="0")
-  inspect(by_name["_helper"], content="1120") // 0x460
-  inspect(by_name["_main"], content="1144") // 0x478
+  inspect(by_name["_compute"], content="1120") // 0x460
+  inspect(by_name["_main"], content="1248") // 0x4e0
+  // All three are regular, strong, non-re-exported definitions.
+  for e in list {
+    inspect(e.is_reexport(), content="false")
+    inspect(e.is_weak(), content="false")
+    inspect(e.kind().reinterpret_as_int64(), content="0") // KIND_REGULAR
+  }
 }
 
 ///|
-test "oracle: exported addresses agree with the symbol table" {
+test "oracle: the x86_64 slice exports the same names at its own offsets" {
+  // dyld_info -exports on the x86_64 slice of sample.fat:
+  //   0x00000000  __mh_execute_header
+  //   0x00000470  _compute
+  //   0x000004D0  _main
+  // The offsets differ from the arm64 slice's, so a walk that ignored the
+  // slice's position in the fat file would still agree on the names but not on
+  // the addresses.
+  let slices = match parse(fixture_bytes("sample.fat")) {
+    Fat(s) => s
+    Thin(_) => fail("expected fat")
+  }
+  let list = exports(slices[0].image)
+  inspect(list.length(), content="3")
+  let by_name : Map[String, Int64] = Map([])
+  for e in list {
+    by_name[e.name] = e.address.reinterpret_as_int64()
+  }
+  inspect(by_name["__mh_execute_header"], content="0")
+  inspect(by_name["_compute"], content="1136") // 0x470
+  inspect(by_name["_main"], content="1232") // 0x4d0
+}
+
+///|
+test "exports: addresses agree with the symbol table" {
   // The same functions appear in LC_SYMTAB with their virtual addresses. The
   // trie stores an offset from the image base, so the two must differ by
   // exactly the base — which the __TEXT segment names.
@@ -91,7 +109,7 @@ test "oracle: exported addresses agree with the symbol table" {
 }
 
 ///|
-test "export trie: every edge is reachable within the region" {
+test "export trie: a region clipped to one byte is rejected, not truncated" {
   // A malformed child offset must be reported rather than followed off the end
   // of the trie. Swapping in a one-byte region makes every child offset invalid.
   let slice = match parse(fixture_bytes("sample.bin")) {
@@ -102,9 +120,8 @@ test "export trie: every edge is reachable within the region" {
     Some(r) => r
     None => fail("expected a trie")
   }
-  let clipped = ExportTrieRegion::{ offset: region.offset, size: 1L, }
-  // Re-derive a slice whose bounds cover only that byte, so the walk cannot
-  // wander into unrelated bytes.
+  // Re-derive a slice whose bounds cover only the first bytes of the trie, so
+  // the walk cannot wander into unrelated bytes.
   let tight = MachSlice::{
     header: slice.header,
     commands: slice.commands,
@@ -114,24 +131,11 @@ test "export trie: every edge is reachable within the region" {
       limit: region.offset + 2L,
     },
   }
-  let _ = clipped
-  // The trie's declared node offsets now point past the readable range, so the
+  // The trie's declared child offsets now point past the readable range, so the
   // walk must fail rather than return a truncated symbol list.
-  let outcome = Ok(exports_with_region(tight, clipped)) catch { e => Err(e) }
+  let outcome = Ok(exports(tight)) catch { e => Err(e) }
   match outcome {
     Ok(_) => fail("expected a rejection for a clipped trie")
     Err(_) => ()
   }
-}
-
-///|
-/// Walks a trie given an explicit region, used by the rejection test.
-fn exports_with_region(
-  slice : MachSlice,
-  region : ExportTrieRegion,
-) -> Array[Export] raise MachscopeError {
-  // Reuse the public walk by temporarily trusting the region: the slice bounds
-  // already restrict what can be read.
-  let _ = region
-  exports(slice)
 }

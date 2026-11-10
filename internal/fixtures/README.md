@@ -1,24 +1,78 @@
 # Test fixtures
 
-These are unmodified Apple system binaries, used as parser inputs so that the
-tests exercise bytes a real linker produced rather than bytes the test author
-believed a linker would produce.
+Every fixture here is generated from source in this directory by
+`make_fixtures.sh`, using the Xcode command line tools. None of them are
+third-party binaries.
+
+They are inputs only: `machscope` neither links against them nor ships any part
+of them in its own output.
 
 | File | Origin |
 |---|---|
-| `ls.fat.macho` | `/bin/ls` from macOS 15, a universal binary with x86_64 and arm64e slices |
-| `ls.x86_64.macho` | the x86_64 slice, extracted with `lipo -thin x86_64` |
-| `ls.arm64e.macho` | the arm64e slice, extracted with `lipo -thin arm64e` |
+| `sample.c` | the source every `sample.*` fixture is built from |
+| `sample.fat` | `sample.c` for arm64 and x86_64, combined with `lipo -create` |
+| `sample.bin` | the arm64 executable the dSYM belongs to |
+| `sample.arm64e` | the same program built with `-arch arm64e`, so the authenticated-pointer fixup path is reachable |
+| `sample.dsym` | the dSYM companion `dsymutil` produced for the arm64 slice |
+| `entitled.c` | source for the binary the entitlement blobs were taken from |
+| `entitled.plist` | the entitlements file that binary was signed with |
+| `entitlements.der` | slot 7 payload, DER-encoded, extracted from that binary |
+| `entitlements.xml` | slot 5 payload, plist XML, extracted from that binary |
 
-They are inputs only: `machscope` neither links against them nor ships any part
-of them in its own output. They are Apple's binaries, redistributed here solely
-so that `moon test` can run anywhere without a macOS machine present.
+## Why these are generated rather than committed from elsewhere
 
-Expected values in `oracle_wbtest.mbt` were taken from `otool -h` and
-`otool -f` on these same files:
+An earlier revision of this repository shipped three copies of `/bin/ls` as
+fixtures. That is a redistribution of an Apple binary — the `ls` in it even
+carries a Regents-of-the-University-of-California copyright notice — and it is
+not something a package declaring `Apache-2.0` can do. The fixtures are now
+built from our own source, and `make_fixtures.sh` is checked in so that anyone
+can regenerate them and compare.
+
+The script passes `-fdebug-compilation-dir=.` when compiling, so the committed
+dSYM records `.` rather than the home directory of whoever built it: a fixture
+that carries a build machine's path is both a small privacy leak and a file that
+differs between machines.
+
+`sample.arm64e` exists for a specific reason. A plain arm64 build reaches only
+the unauthenticated pointer formats; arm64e is what makes clang emit
+`DYLD_CHAINED_PTR_ARM64E_USERLAND24` slots with a signing key and an address
+discriminator, which is the branch of `decode_slot` that would otherwise be
+dead code as far as the tests are concerned.
+
+## The entitlement blobs
+
+`entitlements.der` and `entitlements.xml` are the two payloads Apple wrote for
+the same dictionary, taken out of a binary built from `entitled.c` and signed
+on the command line:
 
 ```
-$ otool -h internal/fixtures/ls.arm64e.macho
+$ clang -arch arm64 -o entitled internal/fixtures/entitled.c
+$ codesign --entitlements internal/fixtures/entitled.plist -s - --force entitled
+$ codesign -d --entitlements :- entitled
+<?xml version="1.0" encoding="UTF-8"?>...
+<key>com.apple.security.get-task-allow</key><true/>
+<key>com.example.counter</key><integer>42</integer>
+<key>com.example.label</key><string>machscope</string>
+<key>com.example.list</key><array><string>a</string><integer>7</integer></array>
+<key>com.example.nested</key><dict><key>inner</key><string>deep</string></dict>
+```
+
+Only the two payloads are stored, not the signed binary: `codesign` embeds a
+signing timestamp, so re-running it does not reproduce the same bytes, and a
+fixture that cannot be regenerated is a fixture nobody can audit. The payloads
+are what the decoder consumes and they are byte-stable once extracted.
+
+Slot 5 holds plist XML (`CSMAGIC_EMBEDDED_ENTITLEMENTS`) and slot 7 holds the
+DER form (`CSMAGIC_EMBEDDED_DER_ENTITLEMENTS`). `CSSLOT_SIGNATURESLOT`
+(`0x10000`) holds the CMS signature over the code directory and carries no
+entitlements; `/bin/ls` has that slot but no entitlement slot at all, which
+`signature_wbtest.mbt` now asserts.
+
+Expected values in `oracle_wbtest.mbt` were taken from `otool -h` and
+`otool -f` on these generated files:
+
+```
+$ otool -h internal/fixtures/sample.arm64e
       magic  cputype cpusubtype  caps    filetype ncmds sizeofcmds      flags
- 0xfeedfacf 16777228          2  0x80           2    20       1712 0x00200085
+ 0xfeedfacf 16777228          2  0x81           2    17       1056 0x00200085
 ```

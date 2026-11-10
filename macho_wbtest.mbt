@@ -4,9 +4,9 @@
 // Two layers are checked. Synthetic buffers built byte by byte pin down the
 // exact rule each rejection enforces, because no real compiler emits a header
 // with, say, an unaligned `cmdsize`. The fixtures under `internal/fixtures`
-// are real binaries produced by Apple's linker and then thinned with `lipo`;
-// they guard against the parser quietly disagreeing with the format that real
-// toolchains write.
+// are real binaries built from `sample.c` by the clang and lipo on whatever
+// machine regenerated them; they guard against the parser quietly disagreeing
+// with the format a real toolchain writes.
 
 ///|
 /// Builds a 64-bit little-endian Mach-O header followed by the given commands.
@@ -63,43 +63,60 @@ fn load_command(cmd : UInt32, payload : Bytes) -> Bytes {
 }
 
 ///|
-/// Reads a checked-in fixture by name.
-fn fixture(name : String) -> Bytes raise {
-  let dir = @env.current_dir().unwrap()
-  @fs.read_file_to_bytes(dir + "/internal/fixtures/" + name)
-}
-
-///|
-test "parse: thin arm64e binary reports its header" {
-  let file = parse(fixture("ls.arm64e.macho"))
+test "parse: thin arm64 binary reports its header" {
+  let file = parse(fixture_bytes("sample.bin"))
   let slice = match file {
     Thin(s) => s
     Fat(_) => fail("expected a thin image")
   }
   inspect(slice.header.kind, content="MH_MAGIC_64")
   inspect(slice.header.kind.pointer_size(), content="8")
-  // arm64e is 0x0100000C; the subtype carries the pointer-authentication bit.
+  // CPU_TYPE_ARM64 is 0x0100000C, and the subtype is CPU_SUBTYPE_ARM64_ALL
+  // (0) with no capability bits: this is plain arm64, not arm64e.
   inspect(slice.header.cpu_type, content="16777228")
+  inspect(slice.header.cpu_subtype, content="0")
+  inspect(slice.header.cpu_capabilities(), content="0")
   inspect(slice.header.file_type, content="2")
   // Counted from the real binary: `ncmds` and the framed table must agree.
-  inspect(slice.header.ncmds, content="20")
-  inspect(slice.commands.length(), content="20")
+  inspect(slice.header.ncmds, content="17")
+  inspect(slice.commands.length(), content="17")
 }
 
 ///|
-test "parse: thin x86_64 binary reports its header" {
-  let file = parse(fixture("ls.x86_64.macho"))
+test "parse: cpusubtype capability bits are masked off the subtype" {
+  // `sample.arm64e` stores 0x81000002 in cpusubtype, which `otool -h` prints as
+  // `cpusubtype 2 caps 0x81`: the high byte is capability flags, not subtype.
+  // A parser that compared the raw field against `CPU_SUBTYPE_ARM64E` would get
+  // this binary wrong.
+  let file = parse(fixture_bytes("sample.arm64e"))
   let slice = match file {
     Thin(s) => s
     Fat(_) => fail("expected a thin image")
   }
+  inspect(slice.header.cpu_subtype, content="-2130706430") // 0x81000002 as i32
+  inspect(slice.header.cpu_subtype_base(), content="2") // CPU_SUBTYPE_ARM64E
+  inspect(slice.header.cpu_capabilities(), content="129") // 0x81
+}
+
+///|
+test "parse: thin x86_64 binary reports its header" {
+  // The x86_64 image is the other architecture `make_fixtures.sh` links from
+  // sample.c; the universal binary wraps it, and the fixture directory keeps
+  // it only inside sample.fat.
+  let file = parse(fixture_bytes("sample.fat"))
+  let slices = match file {
+    Fat(s) => s
+    Thin(_) => fail("expected a fat image")
+  }
+  let slice = slices[0].image
   inspect(slice.header.cpu_type, content="16777223") // CPU_TYPE_X86_64
+  inspect(slice.header.cpu_subtype_base(), content="3")
   inspect(slice.header.file_type, content="2")
 }
 
 ///|
 test "parse: universal binary yields one slice per architecture" {
-  let file = parse(fixture("ls.fat.macho"))
+  let file = parse(fixture_bytes("sample.fat"))
   let slices = match file {
     Fat(s) => s
     Thin(_) => fail("expected a fat image")
@@ -123,13 +140,15 @@ test "parse: universal binary yields one slice per architecture" {
 
 ///|
 test "parse: fat alignment is a power-of-two shift" {
-  let file = parse(fixture("ls.fat.macho"))
+  let file = parse(fixture_bytes("sample.fat"))
   let slices = match file {
     Fat(s) => s
     Thin(_) => fail("expected a fat image")
   }
   for slice in slices {
-    // `align` is the log2 of the slice alignment; Apple aligns to 16 KiB.
+    // `align` is the log2 of the slice alignment. The values are not uniform:
+    // `otool -f sample.fat` reports 2^12 for the x86_64 slice and 2^14 for the
+    // arm64 one, because lipo aligned each to its own page size.
     let step = 1L << slice.align.reinterpret_as_int()
     if slice.offset % step != 0L {
       fail("slice offset is not aligned as its fat_arch entry claims")
@@ -311,7 +330,7 @@ test "reject: every truncation of a real binary is rejected, never accepted" {
   // Truncating at any point must produce an error, not a silently short parse.
   // The loop stops where the file is still longer than the header, because a
   // file truncated inside its header has nothing meaningful to report anyway.
-  let full = fixture("ls.arm64e.macho")
+  let full = fixture_bytes("sample.bin")
   let mut t = 32
   while t < 4096 {
     let cut = Bytes::from_array(full.to_array().exact_view(start=0, end=t))

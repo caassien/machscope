@@ -9,13 +9,13 @@ both can run MoonBit.
 ## Quick start
 
 ```sh
-moon run cmd/main -- internal/fixtures/ls.x86_64.macho
+moon run cmd/main -- internal/fixtures/sample.bin
 ```
 
 ```
-arch x86_64:
-  header      x86_64 MH_MAGIC_64 (little-endian), subtype 3, filetype 2, 18 commands, 1736 bytes
-  cpu         type 16777223, subtype 3, capabilities 0x0
+internal/fixtures/sample.bin:
+  header      arm64 MH_MAGIC_64 (little-endian), subtype 0, filetype 2, 17 commands, 1056 bytes
+  cpu         type 16777228, subtype 0, capabilities 0x0
   filetype    2
   flags       0x200085
 ```
@@ -23,23 +23,28 @@ arch x86_64:
 The segment table, verified field by field against `otool -l`:
 
 ```
-$ moon run cmd/main -- --sections internal/fixtures/ls.x86_64.macho
+$ moon run cmd/main -- --sections internal/fixtures/sample.bin
   __PAGEZERO  vmaddr 0x0  vmsize 0x100000000  fileoff 0  filesize 0
-  __TEXT  vmaddr 0x100000000  vmsize 0x5000  fileoff 0  filesize 20480
-    __text  addr 0x100000718  size 15095  offset 1816
-    __stubs  addr 0x10000420f  size 504  offset 16911
+  __TEXT  vmaddr 0x100000000  vmsize 0x4000  fileoff 0  filesize 16384
+    __text  addr 0x100000460  size 200  offset 1120
+    __stubs  addr 0x100000528  size 12  offset 1320
+  __DATA_CONST  vmaddr 0x100004000  vmsize 0x4000  fileoff 16384  filesize 16384
+    __got  addr 0x100004000  size 8  offset 16384
 ```
 
 The code signature identity, matching `codesign -dvv`:
 
 ```
-$ moon run cmd/main -- --signature internal/fixtures/ls.x86_64.macho
-  identifier  com.apple.ls
+$ moon run cmd/main -- --signature internal/fixtures/sample.bin
+  identifier  sample.arm64
   version     0x20400
-  flags       0x0
+  flags       0x20002
   hash        2
-  slots       8
+  slots       9
 ```
+
+This is a structural read, not a verification: see [Code signature](#code-signature)
+below for what the library does and does not claim about a signature.
 
 ## What it does today
 
@@ -52,7 +57,7 @@ $ moon run cmd/main -- --signature internal/fixtures/ls.x86_64.macho
 | Segment and section table, address ↔ file offset | done |
 | Symbol table with names resolved through the string table | done |
 | Embedded code signature: superblob, CodeDirectory | done |
-| Entitlements, reached through the PKCS#7 DER wrapper | done |
+| Entitlements from slot 5 (XML) and slot 7 (DER plist) | done |
 | DWARF 5 line tables, address → `file:line:column` | done |
 | CLI: `header`, `--commands`, `--symbols`, `--sections`, `--signature`, `--exports`, `--fixups`, `--lookup` | done |
 | `--json` output for every mode | done |
@@ -71,7 +76,8 @@ segments.mbt       LC_SEGMENT_64, sections, address ↔ offset
 exports.mbt        dyld export trie
 fixups.mbt         chained fixups: imports, segment chains, rebase/bind
 signature.mbt      superblob index, CodeDirectory, entitlements
-der.mbt            the DER subset needed to reach a plist
+plist.mbt          Apple's DER property-list encoding, as used by slot 7
+der.mbt            ASN.1 framing: tags, lengths, children
 dwarf.mbt          line program prologues, LEB128
 dwarf_line.mbt     the line-number state machine, address lookup
 json_report.mbt    Json values for every structure
@@ -94,16 +100,53 @@ Parsing is two-stage: `parse_slice` walks the whole load-command table, and only
 then are commands interpreted. A command table that does not tile `sizeofcmds`
 is rejected before any command-specific code runs.
 
+## Code signature
+
+`machscope` reads a signature; it does not verify one. There is no page-hash
+recomputation, no CMS signature check, no certificate chain walk and no
+Gatekeeper policy. `LC_CODE_SIGNATURE` names a byte range, the range holds a
+`SuperBlob`, and this library decodes the blobs in it:
+
+| Slot | Magic | Contents |
+|---|---|---|
+| `0` | `0xfade0c02` | CodeDirectory: identifier, team id, version, flags, hash type, slot counts |
+| `5` | `0xfade7171` | Entitlements, as plist XML |
+| `7` | `0xfade7172` | Entitlements, as Apple's DER property list |
+| `0x10000` | `0xfade0b01` | CMS signature *over* the CodeDirectory — no entitlements |
+
+The distinction between slot 7 and `0x10000` is the one worth stating plainly,
+because the CMS blob is the obvious place to look for entitlements and the wrong
+one: it is a signature, and walking it for an `OCTET STRING` returns signature
+bytes. Only slots 5 and 7 carry the entitlements dictionary. A binary may carry
+either, both, or neither.
+
+The "checking" the library does is structural, and the rules are specific: the
+declared signature range must lie inside the file, a `SuperBlob` may not claim
+more bytes than that range, and every indexed blob must be able to supply its
+own eight-byte header. A file violating any of these is rejected with the field
+and offset that failed. Whether the signature is *valid* is not a question this
+library answers.
+
+```
+$ moon run cmd/main -- --entitlements /usr/bin/ssh
+{"com.apple.private.amfi.version-restriction":1,
+ "keychain-access-groups":["com.apple.ssh.passphrases"]}
+```
+
+`codesign -d --entitlements :- /usr/bin/ssh` prints the same two keys. The DER
+decoder also handles the nested dictionaries and arrays a signed application
+carries: `Finder.app` has over a hundred keys, some of them dicts of dicts.
+
 ## Symbolicating a crash address
 
 Checked against `dwarfdump` on the fixture:
 
 ```
 $ machscope 0x100000490 internal/fixtures/sample.dsym
-t.c:3:33
+sample.c:12:21
 ```
 
-`dwarfdump --debug-line` reports the same address as line 3, column 33. The
+`dwarfdump --debug-line` reports the same address as line 12, column 21. The
 path comes from the line program's directory and file tables, which DWARF 5
 encodes as form descriptions rather than plain strings.
 

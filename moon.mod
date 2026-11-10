@@ -11,7 +11,7 @@
 
 name = "caassien/machscope"
 
-version = "0.4.0"
+version = "0.5.0"
 
 readme = "README.mbt.md"
 
@@ -23,7 +23,7 @@ keywords = [ "macho", "dwarf", "binary-analysis", "dsym", "apple" ]
 
 preferred_target = "wasm"
 
-description = "Mach-O and DWARF inspection in pure MoonBit: segments, symbols, code signature entitlements and crash-address symbolication, with no Apple toolchain required."
+description = "Mach-O and DWARF inspection in pure MoonBit: segments, symbols, code signature entitlements and crash-address symbolication, with no Apple toolchain required. Reads structure; does not verify signatures."
 
 import {
   "moonbitlang/x@0.5.7",

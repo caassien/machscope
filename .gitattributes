@@ -1,3 +1,6 @@
 # Fixtures are binary test inputs; never let git rewrite their line endings or
 # attempt a textual diff, which would silently change the bytes under test.
-internal/fixtures/*.macho -text -diff
+internal/fixtures/sample.bin -text -diff
+internal/fixtures/sample.fat -text -diff
+internal/fixtures/sample.dsym -text -diff
+internal/fixtures/entitlements.der -text -diff

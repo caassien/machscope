@@ -10,15 +10,27 @@ pub const CHAINED_PTR_64_OFFSET : UInt32 = 6
 
 pub const CHAINED_PTR_ARM64E : UInt32 = 1
 
+pub const CHAINED_PTR_ARM64E_FIRMWARE : UInt32 = 10
+
 pub const CHAINED_PTR_ARM64E_USERLAND : UInt32 = 9
+
+pub const CHAINED_PTR_ARM64E_USERLAND24 : UInt32 = 12
 
 pub const CPU_SUBTYPE_MASK : Int64 = 0xFF00_0000
 
 pub const CSMAGIC_CODEDIRECTORY : UInt32 = 0xFADE_0C02
 
+pub const CSMAGIC_EMBEDDED_DER_ENTITLEMENTS : UInt32 = 0xFADE_7172
+
+pub const CSMAGIC_EMBEDDED_ENTITLEMENTS : UInt32 = 0xFADE_7171
+
 pub const CSMAGIC_EMBEDDED_SIGNATURE : UInt32 = 0xFADE_0CC0
 
-pub const CSSLOT_ENTITLEMENTS : UInt32 = 0x0001_0000
+pub const CSSLOT_DER_ENTITLEMENTS : UInt32 = 7
+
+pub const CSSLOT_ENTITLEMENTS : UInt32 = 5
+
+pub const CSSLOT_SIGNATURESLOT : UInt32 = 0x0001_0000
 
 pub const EXPORT_FLAG_REEXPORT : UInt64 = 0x08
 
@@ -64,13 +76,21 @@ pub const S_ATTR_DEBUG : UInt32 = 0x0200_0000
 
 pub const S_ZEROFILL : UInt32 = 0x1
 
+pub const TAG_BOOLEAN : UInt32 = 0x01
+
 pub const TAG_CTX_0 : UInt32 = 0xA0
 
 pub const TAG_CTX_1 : UInt32 = 0xA1
 
+pub const TAG_INTEGER : UInt32 = 0x02
+
 pub const TAG_OCTET_STRING : UInt32 = 0x04
 
 pub const TAG_OID : UInt32 = 0x06
+
+pub const TAG_PLIST : UInt32 = 0x70
+
+pub const TAG_PLIST_DICT : UInt32 = 0xB0
 
 pub const TAG_SEQUENCE : UInt32 = 0x30
 
@@ -88,7 +108,9 @@ pub fn debug_line_section(MachSlice) -> Section? raise MachscopeError
 
 pub fn debug_line_str_section(MachSlice) -> Section? raise MachscopeError
 
-pub fn entitlements_der(MachSlice, SignatureRegion) -> Bytes? raise MachscopeError
+pub fn decode_der_plist(Bytes) -> Plist raise MachscopeError
+
+pub fn entitlements(MachSlice, SignatureRegion) -> Entitlements? raise MachscopeError
 
 pub fn export_trie(MachSlice) -> ExportTrieRegion? raise MachscopeError
 
@@ -219,6 +241,11 @@ pub(all) enum Endian {
 }
 pub fn Endian::tag(Self) -> String
 
+pub(all) struct Entitlements {
+  magic : UInt32
+  value : Plist
+}
+
 pub(all) struct Export {
   name : String
   address : UInt64
@@ -317,6 +344,17 @@ pub(all) struct MachSlice {
   commands : Array[RawCommand]
   bounds : Bounds
 }
+
+pub(all) enum Plist {
+  Bool(Bool)
+  Int(Int64)
+  Str(String)
+  Data(Bytes)
+  Array(Array[Plist])
+  Dict(Array[(String, Plist)])
+}
+pub fn Plist::get(Self, String) -> Self?
+pub fn Plist::to_json(Self) -> Json
 
 pub(all) struct RawCommand {
   cmd : UInt32

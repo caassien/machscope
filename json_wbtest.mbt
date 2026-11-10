@@ -8,7 +8,6 @@
 /// Parses a fixture and builds its JSON report.
 fn report_of(name : String, segments_~ : Bool = false) -> Json raise {
   let file = parse(fixture_bytes(name))
-  let _ = segments_
   file_report(file, segments_~, symbols_=true, exports_=true)
 }
 
@@ -28,7 +27,7 @@ test "json: a thin file reports one architecture" {
 
 ///|
 test "json: a fat file reports one architecture per slice" {
-  let j = report_of("ls.fat.macho")
+  let j = report_of("sample.fat")
   let archs = match j {
     Object(m) =>
       match m.get("architectures") {
@@ -39,7 +38,8 @@ test "json: a fat file reports one architecture per slice" {
   }
   inspect(archs.length(), content="2")
   // Each entry names the slice's own architecture and the byte range it
-  // occupies in the fat file.
+  // occupies in the fat file. `otool -f sample.fat` reports the x86_64 slice
+  // first, at offset 4096 with size 8872 and align 2^12.
   let first = archs[0]
   match first {
     Object(m) => {
@@ -48,8 +48,34 @@ test "json: a fat file reports one architecture per slice" {
         _ => fail("no fat_cpu_type")
       }
       match m.get("fat_offset") {
+        Some(Number(n, ..)) => inspect(n.to_int(), content="4096")
+        _ => fail("no fat_offset")
+      }
+      match m.get("fat_size") {
+        Some(Number(n, ..)) => inspect(n.to_int(), content="8872")
+        _ => fail("no fat_size")
+      }
+      match m.get("fat_align") {
+        Some(Number(n, ..)) => inspect(n.to_int(), content="12")
+        _ => fail("no fat_align")
+      }
+    }
+    _ => fail("architecture entry is not an object")
+  }
+  // The second entry is the arm64 slice, at offset 16384 with size 33872.
+  match archs[1] {
+    Object(m) => {
+      match m.get("fat_cpu_type") {
+        Some(Number(n, ..)) => inspect(n.to_int(), content="16777228")
+        _ => fail("no fat_cpu_type")
+      }
+      match m.get("fat_offset") {
         Some(Number(n, ..)) => inspect(n.to_int(), content="16384")
         _ => fail("no fat_offset")
+      }
+      match m.get("fat_size") {
+        Some(Number(n, ..)) => inspect(n.to_int(), content="33872")
+        _ => fail("no fat_size")
       }
     }
     _ => fail("architecture entry is not an object")
@@ -84,6 +110,10 @@ test "json: the header fields match the parser" {
     Some(String(m)) => inspect(m, content="MH_MAGIC_64")
     _ => fail("no magic")
   }
+  match header.get("cpu_type") {
+    Some(Number(n, ..)) => inspect(n.to_int(), content="16777228")
+    _ => fail("no cpu_type")
+  }
 }
 
 ///|
@@ -112,6 +142,7 @@ test "json: addresses are hex strings so no precision is lost" {
     match s {
       Object(m) =>
         match m.get("address") {
+          // `nm sample.bin` gives _compute the address 0x100000460.
           Some(String(a)) => if a == "0x100000460" { found = true }
           _ => fail("address is not a string")
         }
@@ -119,7 +150,7 @@ test "json: addresses are hex strings so no precision is lost" {
     }
   }
   if !found {
-    fail("expected the helper function's address as a hex string")
+    fail("expected the compute function's address as a hex string")
   }
 }
 
@@ -155,12 +186,14 @@ test "json: segments are omitted unless asked for" {
       }
     _ => fail("architecture is not an object")
   }
-  // The sample has __PAGEZERO, __TEXT, __DATA, __LINKEDIT.
+  // The sample has __PAGEZERO, __TEXT, __DATA_CONST, __LINKEDIT.
   inspect(segs.length(), content="4")
 }
 
 ///|
 test "json: a lookup reports the source position dwarfdump gives" {
+  // `dwarfdump --debug-line sample.dsym` lists 0x0000000100000490 at line 12,
+  // column 21.
   let j = file_lookup_report(
     parse(fixture_bytes("sample.dsym")),
     0x1_0000_0490L,
@@ -185,15 +218,15 @@ test "json: a lookup reports the source position dwarfdump gives" {
   match locations[0] {
     Object(m) => {
       match m.get("file") {
-        Some(String(f)) => inspect(f, content="t.c")
+        Some(String(f)) => inspect(f, content="sample.c")
         _ => fail("no file")
       }
       match m.get("line") {
-        Some(Number(n, ..)) => inspect(n.to_int(), content="3")
+        Some(Number(n, ..)) => inspect(n.to_int(), content="12")
         _ => fail("no line")
       }
       match m.get("column") {
-        Some(Number(n, ..)) => inspect(n.to_int(), content="33")
+        Some(Number(n, ..)) => inspect(n.to_int(), content="21")
         _ => fail("no column")
       }
     }
@@ -229,7 +262,7 @@ test "json: an address with no line information reports an empty list" {
 test "json: the report round-trips through the parser" {
   // Serializing and re-parsing proves the output is valid JSON, not merely
   // a string that looks like it.
-  let j = report_of("ls.x86_64.macho")
+  let j = report_of("sample.fat")
   let text = j.stringify()
   let parsed = Ok(@json.parse(text)) catch { e => Err(e) }
   match parsed {

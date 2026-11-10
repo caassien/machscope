@@ -1,11 +1,18 @@
 // Differential tests for DWARF line tables, against `dwarfdump --debug-line`.
 //
 // `sample.dsym` is a dSYM produced by `clang -g` and `dsymutil` from the
-// three-line `sample.c` checked in beside it. dwarfdump prints the prologue
-// fields and every row; the assertions below are copied from its output.
+// `sample.c` checked in beside it; `internal/fixtures/make_fixtures.sh`
+// regenerates both. dwarfdump prints the prologue fields and every row; the
+// assertions below are copied from its output.
 
 ///|
-/// The single line table of the sample dSYM.
+/// The single line table of the sample dSYM, read with a fixed compilation
+/// directory.
+///
+/// The dSYM itself records "." as `comp_dir` — the fixtures are built with
+/// `-fdebug-compilation-dir=.` so that a committed fixture does not carry the
+/// home directory of whoever built it. Passing "/tmp" here keeps the path
+/// assertions below independent of that choice.
 fn sample_table() -> LineTable raise {
   let slice = match parse(fixture_bytes("sample.dsym")) {
     Thin(s) => s
@@ -28,18 +35,17 @@ test "oracle: the prologue matches dwarfdump" {
   // One file and one directory in this compilation unit.
   inspect(t.files.length(), content="1")
   inspect(t.dirs.length(), content="1")
-  inspect(t.dirs[0], content="/tmp")
-  inspect(t.files[0], content="t.c")
+  // `dirs` comes from the prologue's directory table, which records "."
+  // because the fixtures are built with `-fdebug-compilation-dir=`.
+  inspect(t.dirs[0], content=".")
+  inspect(t.files[0], content="sample.c")
 }
 
 ///|
 test "oracle: the row addresses match dwarfdump" {
-  // dwarfdump --debug-line lists, in order (end_sequence removed):
-  //   0x100000460 line 2, 0x100000468 line 2, 0x10000046c line 2,
-  //   0x100000470 line 2, 0x100000478 line 3, 0x100000490 line 3,
-  //   0x100000498 line 3, 0x1000004b4 line 3, 0x1000004c0 line 3 (end_sequence)
+  // dwarfdump --debug-line lists 24 rows starting at 0x100000460 and ending
+  // with the end-of-sequence row at 0x100000528. These are the 23 live ones.
   let t = sample_table()
-  // The end-of-sequence row is dropped from `rows` and kept separately.
   let addrs : Array[String] = []
   for row in t.rows {
     if !row.end_sequence {
@@ -48,13 +54,14 @@ test "oracle: the row addresses match dwarfdump" {
   }
   inspect(
     addrs.join(","),
-    content="4294968416,4294968424,4294968428,4294968432,4294968440,4294968464,4294968472,4294968500",
+    content="4294968416,4294968432,4294968436,4294968440,4294968444,4294968448,4294968452,4294968464,4294968468,4294968472,4294968484,4294968488,4294968500,4294968504,4294968508,4294968520,4294968528,4294968532,4294968536,4294968544,4294968568,4294968576,4294968604",
   )
 }
 
 ///|
 test "oracle: the line and column fields match dwarfdump" {
-  // The first four rows are all line 2; columns are 0, 28, 30, 21.
+  // The first row is line 9, column 0 — the opening brace of `compute`. The
+  // next is line 10, column 7, which dwarfdump marks `prologue_end`.
   let t = sample_table()
   let live : Array[LineRow] = []
   for row in t.rows {
@@ -62,17 +69,19 @@ test "oracle: the line and column fields match dwarfdump" {
       live.push(row)
     }
   }
-  inspect(live[0].line.to_int64(), content="2")
+  inspect(live[0].line.to_int64(), content="9")
   inspect(live[0].column.to_int64(), content="0")
-  inspect(live[1].line.to_int64(), content="2")
-  inspect(live[1].column.to_int64(), content="28")
-  inspect(live[2].line.to_int64(), content="2")
-  inspect(live[2].column.to_int64(), content="30")
-  inspect(live[3].line.to_int64(), content="2")
-  inspect(live[3].column.to_int64(), content="21")
-  // The helper function's body is line 3.
-  inspect(live[4].line.to_int64(), content="3")
-  inspect(live[4].column.to_int64(), content="0")
+  inspect(live[1].line.to_int64(), content="10")
+  inspect(live[1].column.to_int64(), content="7")
+  inspect(live[1].prologue_end, content="true")
+  // Rows 2 through 6 walk the `for` header on line 11.
+  inspect(live[2].line.to_int64(), content="11")
+  inspect(live[2].column.to_int64(), content="12")
+  inspect(live[6].line.to_int64(), content="11")
+  inspect(live[6].column.to_int64(), content="3")
+  // The `helper` body is line 7.
+  inspect(live[15].line.to_int64(), content="7")
+  inspect(live[15].column.to_int64(), content="0")
 }
 
 ///|
@@ -91,28 +100,28 @@ test "oracle: rows are sorted and the end-of-sequence row is last" {
 
 ///|
 test "lookup: a code address resolves to the source line dwarfdump reports" {
-  // 0x100000468 is `printf`'s argument evaluation on line 2, column 28.
+  // 0x100000490 is `helper`'s call on line 12, column 21.
   let t = sample_table()
-  let loc = match lookup_address(t, 0x1_0000_0468L) {
+  let loc = match lookup_address(t, 0x1_0000_0490L) {
     Some(l) => l
     None => fail("expected a location")
   }
-  inspect(loc.line.to_int64(), content="2")
-  inspect(loc.column.to_int64(), content="28")
-  inspect(loc.file, content="/tmp/t.c")
+  inspect(loc.line.to_int64(), content="12")
+  inspect(loc.column.to_int64(), content="21")
+  inspect(loc.file, content="/tmp/sample.c")
 }
 
 ///|
 test "lookup: an address between rows uses the row that governs it" {
-  // 0x10000046a sits between the row at ...468 and the one at ...46c, so it
-  // must resolve to the ...468 row, not to the following one.
+  // 0x100000492 sits between the row at ...490 and the one at ...494, so it
+  // must resolve to the ...490 row, not to the following one.
   let t = sample_table()
-  let loc = match lookup_address(t, 0x1_0000_046AL) {
+  let loc = match lookup_address(t, 0x1_0000_0492L) {
     Some(l) => l
     None => fail("expected a location")
   }
-  inspect(loc.line.to_int64(), content="2")
-  inspect(loc.column.to_int64(), content="28")
+  inspect(loc.line.to_int64(), content="12")
+  inspect(loc.column.to_int64(), content="21")
 }
 
 ///|
@@ -122,14 +131,14 @@ test "lookup: an address before the first row has no location" {
 }
 
 ///|
-test "lookup: the helper function's address resolves to line 3" {
-  // 0x100000490 is the prologue_end of `helper`, on line 3.
+test "lookup: the helper function's address resolves to line 7" {
+  // 0x1000004d0 is the prologue_end of `helper`, on line 7.
   let t = sample_table()
-  let loc = match lookup_address(t, 0x1_0000_0490L) {
+  let loc = match lookup_address(t, 0x1_0000_04D0L) {
     Some(l) => l
     None => fail("expected a location")
   }
-  inspect(loc.line.to_int64(), content="3")
+  inspect(loc.line.to_int64(), content="7")
 }
 
 ///|
