@@ -14,6 +14,7 @@ of them in its own output.
 | `sample.bin` | the arm64 executable the dSYM belongs to |
 | `sample.arm64e` | the same program built with `-arch arm64e`, so the authenticated-pointer fixup path is reachable |
 | `sample.dsym` | the dSYM companion `dsymutil` produced for the arm64 slice |
+| `sample.dwarf4` | the same program emitted with `-gdwarf-4`, so the pre-5 line-table layout is exercised |
 | `entitled.c` | source for the binary the entitlement blobs were taken from |
 | `entitled.plist` | the entitlements file that binary was signed with |
 | `entitlements.der` | slot 7 payload, DER-encoded, extracted from that binary |
@@ -76,3 +77,13 @@ $ otool -h internal/fixtures/sample.arm64e
       magic  cputype cpusubtype  caps    filetype ncmds sizeofcmds      flags
  0xfeedfacf 16777228          2  0x81           2    17       1056 0x00200085
 ```
+## Why there is a DWARF 4 fixture as well
+
+`sample.dsym` is DWARF 5, whose line-program prologue describes its file table
+with a list of (content type, form) pairs. Versions 2 through 4 use two
+NUL-terminated string lists and a `header_length` that locates the opcode
+stream. The two layouts share almost no code, and until `sample.dwarf4` existed
+the pre-5 path had no fixture — the address arithmetic in it was wrong and
+nothing noticed. `sample.dwarf4` is the same `sample.c` built with `-gdwarf-4`,
+and the tests assert that both versions map the same address to the same source
+line.

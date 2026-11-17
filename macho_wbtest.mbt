@@ -350,3 +350,157 @@ test "reject: every truncation of a real binary is rejected, never accepted" {
     Fat(_) => fail("expected a thin image")
   }
 }
+
+///|
+test "kind: the big-endian magics are recognised in both word sizes" {
+  // A PowerPC image stores MH_MAGIC_64 in big-endian order, which reads as
+  // 0xfeedfacf backwards. Both must decode to the right kind and byte order, or
+  // a legacy image is reported as "not a Mach-O file".
+  let be64 = Buffer()
+  be64.write_uint_be(0xFEED_FACF) // MH_MAGIC_64 written big-endian
+  be64.write_int_be(0x0100_0012) // CPU_TYPE_POWERPC64
+  be64.write_int_be(0)
+  be64.write_uint_be(2) // MH_EXECUTE
+  be64.write_uint_be(0)
+  be64.write_uint_be(0)
+  be64.write_uint_be(0)
+  be64.write_uint_be(0)
+  let slice = match parse(be64.to_bytes()) {
+    Thin(s) => s
+    Fat(_) => fail("expected thin")
+  }
+  inspect(Show::to_string(slice.header.kind), content="MH_CIGAM_64")
+  inspect(Show::to_string(slice.header.kind.endian()), content="big-endian")
+  inspect(slice.header.cpu_type, content="16777234") // ppc64
+  // The kind must also report the right pointer width.
+  inspect(slice.header.kind.pointer_size().to_int64(), content="8")
+}
+
+///|
+test "kind: a 32-bit little-endian image decodes as MH_MAGIC" {
+  // MH_MAGIC is 0xfeedface and the header is four bytes shorter, with no
+  // reserved word. Reading the 32-bit header as 64-bit would consume the first
+  // load command as `reserved`.
+  let b = Buffer()
+  b.write_uint_le(0xFEED_FACE)
+  b.write_int_le(0x0100_0007)
+  b.write_int_le(3)
+  b.write_uint_le(2)
+  b.write_uint_le(0)
+  b.write_uint_le(0)
+  b.write_uint_le(0)
+  let slice = match parse(b.to_bytes()) {
+    Thin(s) => s
+    Fat(_) => fail("expected thin")
+  }
+  inspect(Show::to_string(slice.header.kind), content="MH_MAGIC")
+  inspect(slice.header.kind.header_size(), content="28")
+  inspect(slice.header.kind.pointer_size().to_int64(), content="4")
+}
+
+///|
+test "kind: an image whose magic matches nothing is rejected" {
+  let b = Buffer()
+  b.write_uint_le(0x12345678)
+  for _ in 0..<28 {
+    b.write_byte(b'\x00')
+  }
+  try {
+    ignore(parse(b.to_bytes()))
+    fail("expected a rejection")
+  } catch {
+    BadMagic(magic~) => inspect(magic.to_int64(), content="305419896")
+    e => fail("unexpected error: \{e}")
+  }
+}
+
+///|
+test "descriptor: the architecture names cover the documented cputypes" {
+  // `describe` renders a cputype as the name file(1) prints. An unknown one
+  // falls back to the numeric value rather than inventing a name.
+  let cases : Array[(Int64, String)] = [
+    (7L, "i386"),
+    (0x0100_0007L, "x86_64"),
+    (12L, "arm"),
+    (0x0100_000CL, "arm64"),
+    (18L, "ppc"),
+    (0x0100_0018L, "ppc64"),
+  ]
+  for pair in cases {
+    let (cpu, want) = pair
+    let b = Buffer()
+    b.write_uint_le(0xFEED_FACF)
+    b.write_int_le(cpu.to_int())
+    b.write_int_le(0)
+    b.write_uint_le(2)
+    b.write_uint_le(0)
+    b.write_uint_le(0)
+    b.write_uint_le(0)
+    b.write_uint_le(0)
+    let slice = match parse(b.to_bytes()) {
+      Thin(s) => s
+      Fat(_) => fail("expected thin")
+    }
+    inspect(slice.header.describe().has_prefix(want), content="true")
+  }
+  // An architecture nobody has heard of keeps its number.
+  let b = Buffer()
+  b.write_uint_le(0xFEED_FACF)
+  b.write_int_le(4242)
+  b.write_int_le(0)
+  b.write_uint_le(2)
+  b.write_uint_le(0)
+  b.write_uint_le(0)
+  b.write_uint_le(0)
+  b.write_uint_le(0)
+  let slice = match parse(b.to_bytes()) {
+    Thin(s) => s
+    Fat(_) => fail("expected thin")
+  }
+  inspect(slice.header.describe().has_prefix("cpu=4242"), content="true")
+}
+
+///|
+test "fat: a 64-bit architecture table is decoded with 64-bit offsets" {
+  // FAT_MAGIC_64 (0xcafebabf) widens `offset` and `size` to 64 bits and pads
+  // the entry to 32 bytes. Reading it with the 32-bit layout would take the
+  // high half of `offset` as the low half of `size`.
+  let inner = Buffer()
+  inner.write_uint_le(0xFEED_FACF)
+  inner.write_int_le(0x0100_000C) // arm64
+  inner.write_int_le(0)
+  inner.write_uint_le(2)
+  inner.write_uint_le(0)
+  inner.write_uint_le(0)
+  inner.write_uint_le(0x00200085)
+  inner.write_uint_le(0)
+  let thin = inner.to_bytes()
+  let slice_off = 4096L
+  let b = Buffer()
+  b.write_uint_be(0xCAFE_BABF) // FAT_MAGIC_64
+  b.write_uint_be(1) // nfat_arch
+  b.write_int_be(0x0100_000C) // cputype arm64
+  b.write_int_be(0) // cpusubtype
+  // A 64-bit big-endian field is written high word first.
+  b.write_uint_be(0) // high half of the 64-bit offset
+  b.write_uint_be(slice_off.to_int().reinterpret_as_uint())
+  b.write_uint_be(0) // high half of the 64-bit size
+  b.write_uint_be(thin.length().reinterpret_as_uint())
+  b.write_uint_be(12) // align 2^12
+  b.write_uint_be(0) // reserved
+  while b.length() < slice_off.to_int() {
+    b.write_byte(b'\x00')
+  }
+  for i in 0..<thin.length() {
+    b.write_byte(thin.at(i))
+  }
+  let slices = match parse(b.to_bytes()) {
+    Fat(s) => s
+    Thin(_) => fail("expected fat")
+  }
+  inspect(slices.length(), content="1")
+  inspect(slices[0].offset, content="4096")
+  inspect(slices[0].size, content=thin.length().to_int64().to_string())
+  inspect(slices[0].align.to_int64(), content="12")
+  inspect(slices[0].cpu_type, content="16777228")
+}

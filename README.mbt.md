@@ -243,17 +243,25 @@ moon test
 
 Three layers:
 
-1. **Synthetic buffers** pin down each rejection rule. No real linker emits an
-   unaligned `cmdsize`, so these cases have to be constructed.
-2. **Real fixtures** in `internal/fixtures/`: `/bin/ls` from macOS 15 (universal
-   and thinned per architecture), a dSYM built from `sample.c`, and that
-   binary.
+1. **Synthetic buffers** pin down each rejection rule and each format variant.
+   No real linker emits an unaligned `cmdsize` or a big-endian PowerPC image,
+   so those cases have to be constructed.
+2. **Fixtures** in `internal/fixtures/`, all generated from `sample.c` and
+   `entitled.c` by `make_fixtures.sh`: a universal binary, its slices, an
+   arm64e build, a DWARF 5 dSYM, a DWARF 4 dSYM, and the two entitlement
+   payloads `codesign` wrote.
 3. **Differential tests** assert values copied from `otool -h`, `otool -f`,
-   `nm`, `codesign -dvv`, `dyld_info -exports` and `dwarfdump --debug-line` for
-   those same fixtures.
+   `nm`, `codesign -dvv`, `dyld_info -exports` and `dwarfdump --debug-line` run
+   on those same fixtures.
+
+The suite is 130 tests. `moon test --enable-coverage` plus `moon coverage
+analyze` reports what is not exercised; the remaining gaps are mostly error
+branches for malformed inputs that no fixture can reach.
 
 ## Licence
 
-Apache-2.0. The fixture binaries are Apple system binaries used only as test
-inputs and are not redistributed as part of the library's functionality; see
-`internal/fixtures/README.md`.
+Apache-2.0, copyright 2026 刁礼财 (caassien). Every binary in
+`internal/fixtures/` is generated from source in this repository by
+`internal/fixtures/make_fixtures.sh`; none of them is a third-party binary. See
+`internal/fixtures/README.md` for the provenance of each file and why they are
+generated rather than committed.

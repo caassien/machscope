@@ -201,9 +201,15 @@ fn parse_line_program(
   }
   // Include directories, then file names, each NUL-terminated and the list
   // ending with an empty string.
-  let (dirs, cur) = read_nul_list(b, cur)
-  let (files, cur) = read_nul_list(b, cur)
-  let _ = prologue_end
+  let (dirs, curs) = read_nul_list(b, cur)
+  let (files, _) = read_nul_list(b, curs)
+  // The opcode stream starts at `header_length` bytes past the first prologue
+  // field, not wherever the string lists happened to end. The two usually
+  // agree, but a producer is allowed to pad the prologue, and `dsymutil`
+  // writing DWARF 4 pads by three bytes. Trusting the lists' end position
+  // instead of `prologue_end` puts the parser mid-opcode: every address then
+  // decodes from the wrong offset and comes out as a small wrong number.
+  let cur = Cursor::{ pos: prologue_end, endian: cur.endian, }
   return finish_program(
     slice,
     LineTable::{ version, comp_dir, dirs, files, rows: [], },

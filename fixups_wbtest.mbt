@@ -241,3 +241,166 @@ test "reject: an import table running past the fixup blob" {
     Err(_) => ()
   }
 }
+
+///|
+/// Encodes the four arm64e slot kinds from their fields, the inverse of what
+/// `decode_slot` does.
+fn arm64e_slot(
+  auth : Bool,
+  bind : Bool,
+  ordinal : Int64,
+  diversity : Int64,
+  discriminator : Bool,
+  key : Int64,
+  next : Int64,
+  target : Int64,
+) -> Int64 {
+  let mut v = 0L
+  if auth {
+    v = v | 0x8000_0000_0000_0000L
+  }
+  if bind {
+    v = v | 0x4000_0000_0000_0000L
+  }
+  v = v | ((next & 0x7FFL) << 51)
+  if bind {
+    v = v | (ordinal & 0xFF_FFFFL)
+    if auth {
+      v = v | ((diversity & 0xFFFFL) << 32)
+      if discriminator {
+        v = v | (1L << 48)
+      }
+      v = v | ((key & 0x3L) << 49)
+    }
+  } else if auth {
+    v = v | (target & 0xFFFF_FFFFL)
+    v = v | ((diversity & 0xFFFFL) << 32)
+    if discriminator {
+      v = v | (1L << 48)
+    }
+    v = v | ((key & 0x3L) << 49)
+  } else {
+    v = v | (target & 0x0000_07FF_FFFF_FFFFL)
+  }
+  v
+}
+
+///|
+test "slot: the plain 64-bit bind and rebase forms decode" {
+  // dyld_chained_ptr_64_bind: ordinal:24 at bit 0, next:12, bind bit set.
+  let bind = 0x8000_0040_0000_0007L // bind, next=0x40, ordinal=7
+  inspect(
+    decode_slot(bind, CHAINED_PTR_64) is Some(Bind(7L, 0, 0, false)),
+    content="true",
+  )
+  // dyld_chained_ptr_64_rebase: target:36 at bit 0, bind bit clear.
+  let rebase = 0x0000_0000_0000_0123L
+  inspect(
+    decode_slot(rebase, CHAINED_PTR_64) is Some(Rebase(0x123L, 0, 0, false)),
+    content="true",
+  )
+  // high8 occupies bits 36..43. The target mask is 36 bits wide, so a slot
+  // whose high8 is set must still report exactly the low 36 bits as the
+  // target; a mask one nibble too wide would fold part of high8 into it.
+  let with_high8 = (0xABL << 36) | 0x123L
+  inspect(
+    decode_slot(with_high8, CHAINED_PTR_64_OFFSET)
+    is Some(Rebase(0x123L, 0, 0, false)),
+    content="true",
+  )
+}
+
+///|
+test "slot: the arm64e authenticated bind carries key and diversity" {
+  let raw = arm64e_slot(true, true, 5L, 0xBEEFL, true, 3L, 2L, 0L)
+  let got = decode_slot(raw, CHAINED_PTR_ARM64E_USERLAND24)
+  inspect(got is Some(Bind(5L, 3, 0xBEEF, true)), content="true")
+}
+
+///|
+test "slot: the arm64e plain bind ignores the diversity field" {
+  let raw = arm64e_slot(false, true, 9L, 0L, false, 0L, 0L, 0L)
+  inspect(
+    decode_slot(raw, CHAINED_PTR_ARM64E) is Some(Bind(9L, 0, 0, false)),
+    content="true",
+  )
+}
+
+///|
+test "slot: the arm64e authenticated rebase keeps its 32-bit target" {
+  let raw = arm64e_slot(true, false, 0L, 0x1234L, false, 1L, 0L, 0xDEAD_BEEFL)
+  let got = decode_slot(raw, CHAINED_PTR_ARM64E_USERLAND)
+  inspect(got is Some(Rebase(0xDEAD_BEEFL, 1, 0x1234, false)), content="true")
+}
+
+///|
+test "slot: the arm64e plain rebase carries a 43-bit target" {
+  // 43 bits is the widest target field of any of these formats; a mask that is
+  // one bit short silently truncates every rebase by half the address space.
+  let widest = 0x0000_07FF_FFFF_FFFFL
+  let raw = arm64e_slot(false, false, 0L, 0L, false, 0L, 0L, widest)
+  // `is Some(Rebase(widest, ..))` would bind a new variable rather than
+  // compare, so match explicitly and check the field.
+  match decode_slot(raw, CHAINED_PTR_ARM64E) {
+    Some(Rebase(t, k, d, disc)) => {
+      inspect(t, content=widest.to_string())
+      inspect(k.to_int64(), content="0")
+      inspect(d.to_int64(), content="0")
+      inspect(disc, content="false")
+    }
+    _ => fail("expected a rebase")
+  }
+}
+
+///|
+test "slot: _USERLAND24 widens the ordinal but _USERLAND does not" {
+  // The two differ only in the ordinal width. A 24-bit ordinal must survive in
+  // one and be masked to 16 bits in the other.
+  let raw = arm64e_slot(true, true, 0xFF_FFFFL, 0L, false, 0L, 0L, 0L)
+  inspect(
+    decode_slot(raw, CHAINED_PTR_ARM64E_USERLAND24)
+    is Some(Bind(0xFF_FFFFL, 0, 0, false)),
+    content="true",
+  )
+  inspect(
+    decode_slot(raw, CHAINED_PTR_ARM64E_USERLAND)
+    is Some(Bind(0xFFFFL, 0, 0, false)),
+    content="true",
+  )
+}
+
+///|
+test "slot: an unknown pointer format is None rather than a guess" {
+  // 0 is not a valid pointer format. Returning a plausible-looking slot for it
+  // would report addresses nobody wrote.
+  inspect(decode_slot(0L, 0U) is None, content="true")
+  inspect(decode_slot(0xFFFFL, 99U) is None, content="true")
+}
+
+///|
+test "stride: arm64e counts in 8-byte slots and the 64-bit formats in words" {
+  // The same bit field means a different distance depending on the format.
+  // Using the wrong unit walks into the middle of the next pointer.
+  let raw = 3L << 51 // arm64e next field = 3
+  inspect(slot_stride(raw, CHAINED_PTR_ARM64E), content="24")
+  inspect(slot_stride(raw, CHAINED_PTR_ARM64E_USERLAND24), content="24")
+  // For the 64-bit formats the low 12 bits are the stride, in 4-byte words.
+  let raw64 = 3L
+  inspect(slot_stride(raw64, CHAINED_PTR_64), content="12")
+  inspect(slot_stride(raw64, CHAINED_PTR_64_OFFSET), content="12")
+}
+
+///|
+test "imports: lookup by index returns None past the end" {
+  let imports : Array[ChainedImport] = [
+    ChainedImport::{
+      name_offset: 0U,
+      name: "a",
+      library_ordinal: 1U,
+      weak: false,
+    },
+  ]
+  inspect(lookup_import(imports, 0L) is Some(_), content="true")
+  inspect(lookup_import(imports, 1L) is None, content="true")
+  inspect(lookup_import(imports, -1L) is None, content="true")
+}

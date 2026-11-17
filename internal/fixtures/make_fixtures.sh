@@ -64,6 +64,16 @@ build_thin x86_64 sample.x86_64.o sample.x86_64
 # into the slot; a plain arm64 build never produces one.
 build_thin arm64e sample.arm64e.o sample.arm64e
 
+# `sample.dwarf4`: the same program emitted with `-gdwarf-4`. The default is
+# DWARF 5, whose prologue describes its file table with form descriptions;
+# versions 2 through 4 use two NUL-terminated string lists instead. Both
+# layouts are decoded, so both need a fixture or one of them is untested code.
+clang -arch arm64 -g -gdwarf-4 -O0 -fdebug-compilation-dir=. \
+      -frandom-seed=machscope -c -o sample.dwarf4.o sample.c
+clang -arch arm64 $LDFLAGS sample.dwarf4.o -o sample.dwarf4.bin
+dsymutil -o dwarf4.dSYM sample.dwarf4.bin
+cp dwarf4.dSYM/Contents/Resources/DWARF/sample.dwarf4.bin sample.dwarf4
+
 # The dSYM companion for the arm64 slice. `dsymutil` reads the debug map the
 # linker left in the binary and rewrites the DWARF into a standalone file, which
 # is the form a crash report is symbolicated against.
@@ -129,7 +139,8 @@ PY
 # Everything above is an intermediate; the repository keeps only what the tests
 # read.
 rm -rf sample.arm64 sample.x86_64 sample.arm64.thin sample.x86_64.thin \
-       sample.arm64.o sample.x86_64.o sample.arm64e.o build.dSYM entitled.bin \
+       sample.arm64.o sample.x86_64.o sample.arm64e.o sample.dwarf4.o \
+       sample.dwarf4.bin build.dSYM dwarf4.dSYM entitled.bin \
        entitled.bin.dSYM
 
 ls -l

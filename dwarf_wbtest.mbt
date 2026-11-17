@@ -202,3 +202,59 @@ test "reject: a line program claiming more bytes than the section holds" {
     e => fail("unexpected error: \{e}")
   }
 }
+
+///|
+/// The line table of a DWARF 4 dSYM, read the same way.
+fn dwarf4_table() -> LineTable raise {
+  let slice = match parse(fixture_bytes("sample.dwarf4")) {
+    Thin(s) => s
+    Fat(_) => fail("expected a thin dSYM")
+  }
+  let tables = line_tables(slice, comp_dir="/build")
+  if tables.length() != 1 {
+    fail("expected one line program, got \{tables.length()}")
+  }
+  tables[0]
+}
+
+///|
+test "oracle: a DWARF 4 prologue decodes through the pre-5 path" {
+  // `sample.dwarf4` is sample.c emitted with `-gdwarf-4`. dwarfdump reports
+  //   version 4  min_inst_length 1  max_ops_per_inst 1  default_is_stmt 1
+  //   line_base -5  line_range 14  opcode_base 13
+  // Versions 2-4 describe their file table as two NUL-terminated string lists
+  // rather than the form-described tables DWARF 5 uses, so this exercises a
+  // different branch of the prologue parser than sample.dsym does.
+  let t = dwarf4_table()
+  inspect(t.version.to_int64(), content="4")
+  // In DWARF 4 the file list is 1-based and the fixture has one entry.
+  inspect(t.files.length(), content="1")
+  inspect(t.files[0], content="sample.c")
+}
+
+///|
+test "oracle: a DWARF 4 row maps an address to the same source line" {
+  // dwarfdump --debug-line sample.dwarf4 puts 0x100000470 at line 10,
+  // column 7, marked prologue_end. The same source compiled at DWARF 5
+  // produces the same row, so a difference here would mean the version
+  // dispatch, not the program, is wrong.
+  let t = dwarf4_table()
+  let loc = match lookup_address(t, 0x1_0000_0470L) {
+    Some(l) => l
+    None => fail("expected a location")
+  }
+  inspect(loc.line.to_int64(), content="10")
+  inspect(loc.column.to_int64(), content="7")
+  // File indices are 1-based before DWARF 5, so index 1 is files[0].
+  inspect(loc.file, content="/build/sample.c")
+}
+
+///|
+test "oracle: the DWARF 4 and DWARF 5 tables agree on the row count" {
+  // Both were built from the same source at -O0, so the statement list is the
+  // same length. A version-dependent bug in the opcode loop would show up as a
+  // different number of emitted rows.
+  let four = dwarf4_table()
+  let five = sample_table()
+  inspect(four.rows.length(), content=five.rows.length().to_string())
+}

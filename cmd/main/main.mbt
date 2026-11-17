@@ -41,6 +41,7 @@ pub impl Eq for Subcommand with fn equal(a, b) {
     | (Signature, Signature)
     | (Entitlements, Entitlements)
     | (Exports, Exports)
+    | (Fixups, Fixups)
     | (Help, Help) => true
     (Lookup(x), Lookup(y)) => x == y
     _ => false
