@@ -50,13 +50,31 @@ cd "$here"
 CLANG_FLAGS="-g -O0 -fdebug-compilation-dir=. -frandom-seed=machscope"
 LDFLAGS="-Wl,-oso_prefix,."
 
+# The linker writes each `N_OSO` debug-map entry's `n_value` as the object
+# file's modification time, so two builds a second apart differ in a committed
+# fixture even when every byte the compiler emitted is identical. Pinning the
+# timestamp is what makes a rebuild reproduce the committed file; without it the
+# dSYM and the executables carry the wall clock of whoever ran this script.
+STAMP=202001010000
+
+# Compile then link. The `touch` is the fix described above; it has to land
+# between the two steps, because it is the linker that reads the timestamp.
 build_thin() { # arch, object, output
   clang -arch "$1" $CLANG_FLAGS -c -o "$2" sample.c
+  touch -t $STAMP "$2"
   clang -arch "$1" $LDFLAGS "$2" -o "$3"
 }
 
 build_thin arm64  sample.arm64.o  sample.arm64
 build_thin x86_64 sample.x86_64.o sample.x86_64
+
+# `sample.chains`: the fixture whose fixup chain is long enough to walk. Every
+# other fixture carries a single fixup, which cannot distinguish a walk that
+# follows `next` from one that reads the stride out of the wrong bits. See
+# `chains.c` for why 64 relocations are enough to tell the two apart.
+clang -arch arm64 $CLANG_FLAGS -c -o sample.chains.o chains.c
+touch -t $STAMP sample.chains.o
+clang -arch arm64 $LDFLAGS sample.chains.o -o sample.chains
 
 # `sample.arm64e`: the same program built for arm64e, which is what makes the
 # authenticated-pointer branch of `decode_slot` reachable. arm64e fixes up
@@ -70,6 +88,7 @@ build_thin arm64e sample.arm64e.o sample.arm64e
 # layouts are decoded, so both need a fixture or one of them is untested code.
 clang -arch arm64 -g -gdwarf-4 -O0 -fdebug-compilation-dir=. \
       -frandom-seed=machscope -c -o sample.dwarf4.o sample.c
+touch -t $STAMP sample.dwarf4.o
 clang -arch arm64 $LDFLAGS sample.dwarf4.o -o sample.dwarf4.bin
 dsymutil -o dwarf4.dSYM sample.dwarf4.bin
 cp dwarf4.dSYM/Contents/Resources/DWARF/sample.dwarf4.bin sample.dwarf4
@@ -140,7 +159,7 @@ PY
 # read.
 rm -rf sample.arm64 sample.x86_64 sample.arm64.thin sample.x86_64.thin \
        sample.arm64.o sample.x86_64.o sample.arm64e.o sample.dwarf4.o \
-       sample.dwarf4.bin build.dSYM dwarf4.dSYM entitled.bin \
+       sample.chains.o sample.dwarf4.bin build.dSYM dwarf4.dSYM entitled.bin \
        entitled.bin.dSYM
 
 ls -l
