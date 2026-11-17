@@ -1,6 +1,10 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "caassien/machscope"
 
+import {
+  "moonbitlang/core/json",
+}
+
 // Values
 pub const CHAINED_IMPORT_FORMAT : UInt32 = 1
 
@@ -108,11 +112,11 @@ pub fn export_trie(MachSlice) -> ExportTrieRegion? raise MachscopeError
 
 pub fn exports(MachSlice) -> Array[Export] raise MachscopeError
 
-pub fn file_lookup_report(MachFile, Int64) -> Json raise MachscopeError
+pub fn file_lookup_report(MachFile, Int64) -> @json.Json raise MachscopeError
 
 pub fn file_offset_of_address(Array[Segment], Int64) -> Int64?
 
-pub fn file_report(MachFile, segments_? : Bool, symbols_? : Bool, exports_? : Bool, fixups_? : Bool) -> Json raise MachscopeError
+pub fn file_report(MachFile, segments_? : Bool, symbols_? : Bool, exports_? : Bool, fixups_? : Bool) -> @json.Json raise MachscopeError
 
 pub fn find_section(Array[Segment], String, String) -> Section?
 
@@ -138,9 +142,9 @@ pub fn signature_blobs(MachSlice, SignatureRegion) -> Array[SignatureBlobRef] ra
 
 pub fn signature_region(MachSlice) -> SignatureRegion? raise MachscopeError
 
-pub fn slice_lookup_report(MachSlice, Int64) -> Json raise MachscopeError
+pub fn slice_lookup_report(MachSlice, Int64) -> @json.Json raise MachscopeError
 
-pub fn slice_report(MachSlice, segments_? : Bool, symbols_? : Bool, exports_? : Bool, fixups_? : Bool) -> Json raise MachscopeError
+pub fn slice_report(MachSlice, segments_? : Bool, symbols_? : Bool, exports_? : Bool, fixups_? : Bool) -> @json.Json raise MachscopeError
 
 pub fn string_table_entry(MachSlice, SymtabCommand, UInt32) -> String raise MachscopeError
 
@@ -243,7 +247,7 @@ pub(all) struct Export {
 pub fn Export::is_reexport(Self) -> Bool
 pub fn Export::is_weak(Self) -> Bool
 pub fn Export::kind(Self) -> UInt64
-pub fn Export::to_json(Self) -> Json
+pub fn Export::to_json(Self) -> @json.Json
 
 pub(all) struct ExportTrieRegion {
   offset : Int64
@@ -272,7 +276,7 @@ pub(all) struct Fixup {
   has_discriminator : Bool
 }
 pub fn Fixup::is_bind(Self) -> Bool
-pub fn Fixup::to_json(Self) -> Json
+pub fn Fixup::to_json(Self) -> @json.Json
 
 pub(all) struct LineRow {
   address : Int64
@@ -315,7 +319,7 @@ pub(all) struct MachHeader {
 pub fn MachHeader::cpu_capabilities(Self) -> Int64
 pub fn MachHeader::cpu_subtype_base(Self) -> Int64
 pub fn MachHeader::describe(Self) -> String
-pub fn MachHeader::to_json(Self) -> Json
+pub fn MachHeader::to_json(Self) -> @json.Json
 
 pub(all) enum MachKind {
   Mach64
@@ -342,7 +346,7 @@ pub(all) enum Plist {
   Dict(Array[(String, Plist)])
 }
 pub fn Plist::get(Self, String) -> Self?
-pub fn Plist::to_json(Self) -> Json
+pub fn Plist::to_json(Self) -> @json.Json
 
 pub(all) struct RawCommand {
   cmd : UInt32
@@ -377,7 +381,7 @@ pub(all) struct Segment {
 }
 pub fn Segment::contains_address(Self, Int64) -> Bool
 pub fn Segment::contains_offset(Self, Int64) -> Bool
-pub fn Segment::to_json(Self) -> Json
+pub fn Segment::to_json(Self) -> @json.Json
 
 pub(all) struct SegmentChains {
   segment_index : Int64
@@ -403,7 +407,7 @@ pub(all) struct SourceLocation {
   line : UInt32
   column : UInt32
 }
-pub fn SourceLocation::to_json(Self) -> Json
+pub fn SourceLocation::to_json(Self) -> @json.Json
 
 pub(all) struct Symbol {
   name : String
@@ -415,7 +419,7 @@ pub(all) struct Symbol {
 pub fn Symbol::is_debug(Self) -> Bool
 pub fn Symbol::is_external(Self) -> Bool
 pub fn Symbol::kind(Self) -> UInt32
-pub fn Symbol::to_json(Self) -> Json
+pub fn Symbol::to_json(Self) -> @json.Json
 
 pub(all) struct SymtabCommand {
   symoff : Int64

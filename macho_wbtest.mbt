@@ -257,7 +257,7 @@ test "reject: unaligned cmdsize" {
 ///|
 test "reject: ncmds that cannot fit in sizeofcmds" {
   // 4 commands need at least 32 bytes; the header claims 8.
-  let cmd = load_command(0x1, Bytes::new(0))
+  let cmd = load_command(0x1, Bytes::make(0, b'\x00'))
   let bytes = synthetic_macho64(
     [cmd, cmd, cmd, cmd],
     ncmds_override=Some(4U),
@@ -274,7 +274,7 @@ test "reject: ncmds that cannot fit in sizeofcmds" {
 
 ///|
 test "reject: a command that extends past sizeofcmds" {
-  let cmd = load_command(0x1, Bytes::new(0))
+  let cmd = load_command(0x1, Bytes::make(0, b'\x00'))
   // Two commands are present but the header only accounts for one.
   let bytes = synthetic_macho64(
     [cmd, cmd],
