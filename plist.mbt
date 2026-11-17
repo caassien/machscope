@@ -224,7 +224,7 @@ fn plist_bytes(bytes : Bytes, el : DerElement) -> Bytes raise MachscopeError {
       detail="content range runs backwards",
     )
   }
-  let out = Buffer::Buffer(size_hint=n.to_int())
+  let out = Buffer::Buffer()
   for i in 0..<n.to_int() {
     out.write_byte(bytes.at(el.content_start.to_int() + i))
   }

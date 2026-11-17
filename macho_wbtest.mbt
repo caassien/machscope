@@ -52,7 +52,7 @@ fn synthetic_macho64(
 fn load_command(cmd : UInt32, payload : Bytes) -> Bytes {
   let unpadded = 8 + payload.length()
   let padded = (unpadded + 3) / 4 * 4
-  let buf = Buffer(size_hint=padded)
+  let buf = Buffer()
   buf.write_uint_le(cmd)
   buf.write_uint_le(padded.reinterpret_as_uint())
   buf.write_bytes(payload)

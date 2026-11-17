@@ -171,7 +171,7 @@ pub fn Bounds::slice(
   what : String,
 ) -> Bytes raise MachscopeError {
   self.require(offset, n, what)
-  let out = Buffer::Buffer(size_hint=n.to_int())
+  let out = Buffer::Buffer()
   for i in 0..<n.to_int() {
     out.write_byte(self.bytes.at(offset.to_int() + i))
   }
