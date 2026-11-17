@@ -378,16 +378,21 @@ test "slot: an unknown pointer format is None rather than a guess" {
 }
 
 ///|
-test "stride: arm64e counts in 8-byte slots and the 64-bit formats in words" {
-  // The same bit field means a different distance depending on the format.
-  // Using the wrong unit walks into the middle of the next pointer.
-  let raw = 3L << 51 // arm64e next field = 3
+test "stride: next is at bit 51 in every format, with a format-specific unit" {
+  // arm64e: 11-bit field counting 8-byte pointers.
+  let raw = 3L << 51
   inspect(slot_stride(raw, CHAINED_PTR_ARM64E), content="24")
   inspect(slot_stride(raw, CHAINED_PTR_ARM64E_USERLAND24), content="24")
-  // For the 64-bit formats the low 12 bits are the stride, in 4-byte words.
-  let raw64 = 3L
+  // The plain 64-bit formats: 12-bit field at the same position, counting
+  // 4-byte words. Reading the stride from the low 12 bits instead — which are
+  // the low bits of `target` — is what made the walk stop after a few slots on
+  // every real binary, so the field position is asserted directly.
+  let raw64 = 3L << 51
   inspect(slot_stride(raw64, CHAINED_PTR_64), content="12")
   inspect(slot_stride(raw64, CHAINED_PTR_64_OFFSET), content="12")
+  // A value in the low 12 bits must contribute nothing to the stride.
+  inspect(slot_stride(0xFFFL, CHAINED_PTR_64), content="0")
+  inspect(slot_stride(0x7FFL, CHAINED_PTR_ARM64E), content="0")
 }
 
 ///|
@@ -403,4 +408,57 @@ test "imports: lookup by index returns None past the end" {
   inspect(lookup_import(imports, 0L) is Some(_), content="true")
   inspect(lookup_import(imports, 1L) is None, content="true")
   inspect(lookup_import(imports, -1L) is None, content="true")
+}
+
+///|
+test "oracle: a 65-slot chain is walked to its end, as dyld_info does" {
+  // `sample.chains` exists because every other fixture carries one fixup, and
+  // one fixup cannot tell a walk that follows `next` from one that stops after
+  // the first slot. That is exactly how the stride bug survived: `next` was read
+  // from the low 12 bits of `target` instead of bit 51, every local test passed,
+  // and `/usr/bin/ssh` reported 12 fixups where `dyld_info` reported 1024.
+  //
+  // `dyld_info -fixups sample.chains` prints 65 rows: one bind in
+  // `__DATA_CONST,__got` and 64 rebases in `__DATA,__data`, the rebases forming
+  // a chain inside a single page. A walk that mis-strides lands on the wrong
+  // offsets and reports fewer, so the count is the assertion.
+  let slice = match parse(fixture_bytes("sample.chains")) {
+    Thin(s) => s
+    Fat(_) => fail("expected thin")
+  }
+  let found = fixups(slice)
+  inspect(found.length(), content="65")
+  let mut binds = 0
+  let mut rebases = 0
+  for f in found {
+    if f.is_bind() {
+      binds = binds + 1
+    } else {
+      rebases = rebases + 1
+    }
+  }
+  inspect(binds, content="1")
+  inspect(rebases, content="64")
+  // The one bind is the import `dyld_info` names; the 64 rebases all point at
+  // string literals in `__TEXT`, so none of them may decode as a bind.
+  for f in found {
+    if f.is_bind() {
+      match f.symbol {
+        Some(name) => inspect(name, content="_printf")
+        None => fail("expected a symbol on the one bind")
+      }
+    }
+  }
+  // A mis-strided walk revisits slots, and a slot array is uint64_t-aligned, so
+  // a duplicate address or an odd address both mean the walk lost its place.
+  let seen : Map[Int64, Bool] = Map([])
+  for f in found {
+    if seen.contains(f.address) {
+      fail("address 0x\{hex(f.address)} reported twice")
+    }
+    seen[f.address] = true
+    if f.address % 8L != 0L {
+      fail("address 0x\{hex(f.address)} is not 8-byte aligned")
+    }
+  }
 }

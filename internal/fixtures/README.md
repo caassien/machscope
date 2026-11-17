@@ -13,6 +13,8 @@ of them in its own output.
 | `sample.fat` | `sample.c` for arm64 and x86_64, combined with `lipo -create` |
 | `sample.bin` | the arm64 executable the dSYM belongs to |
 | `sample.arm64e` | the same program built with `-arch arm64e`, so the authenticated-pointer fixup path is reachable |
+| `chains.c` | source for the long-chain fixture |
+| `sample.chains` | `chains.c` for arm64: 65 fixups in two chains, so a walk that mis-strides is visible |
 | `sample.dsym` | the dSYM companion `dsymutil` produced for the arm64 slice |
 | `sample.dwarf4` | the same program emitted with `-gdwarf-4`, so the pre-5 line-table layout is exercised |
 | `entitled.c` | source for the binary the entitlement blobs were taken from |
@@ -34,11 +36,28 @@ dSYM records `.` rather than the home directory of whoever built it: a fixture
 that carries a build machine's path is both a small privacy leak and a file that
 differs between machines.
 
+It also pins each object file's modification time with `touch -t` before
+linking. The linker writes that timestamp into every `N_OSO` debug-map entry as
+its `n_value`, so without the pin two builds of byte-identical compiler output
+differ in the committed fixture, and the script's claim to regenerate the
+committed bytes is not true. Two full runs of the script now produce identical
+files; that is checked before the fixtures are committed.
+
 `sample.arm64e` exists for a specific reason. A plain arm64 build reaches only
 the unauthenticated pointer formats; arm64e is what makes clang emit
 `DYLD_CHAINED_PTR_ARM64E_USERLAND24` slots with a signing key and an address
 discriminator, which is the branch of `decode_slot` that would otherwise be
 dead code as far as the tests are concerned.
+
+`sample.chains` exists for a different reason, and it is a bug this repository
+shipped. `next` — the field giving the distance to the next slot — sits at bit
+51 in every pointer format, but the code read the stride out of the low 12 bits,
+which are the low bits of `target`. Every fixture here had exactly one fixup, so
+every fixture still passed: a chain of length one never reads `next`. Against
+`/usr/bin/ssh` the walk reported 12 of 1024 slots. Nothing with a single fixup
+can catch that, so `chains.c` declares 64 `static` pointers to string literals,
+which ld64 relocates into one `__DATA,__data` run of 64 consecutive links. Both
+kinds of edge are then present in one file: 64 rebases and one bind.
 
 ## The entitlement blobs
 

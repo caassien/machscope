@@ -159,14 +159,20 @@ diversity value and an address discriminator in the bits the plain format uses
 for the import ordinal.
 
 ```
-$ machscope --fixups internal/fixtures/ls.arm64e.macho
-internal/fixtures/ls.arm64e.macho: 113 fixups
-  0x100008000 bind _humanize_number (lib 1)
-  0x100008008 bind _tgetent (lib 2)
+$ machscope --fixups internal/fixtures/sample.chains
+internal/fixtures/sample.chains: 65 fixups
+  0x100004000 bind _printf (lib 1)
+  0x100008000 rebase -> 0xb4d
   ...
 ```
 
-All 113 addresses match `dyld_info -fixups` on that file.
+All 65 addresses and types match `dyld_info -fixups` on that file: one bind in
+`__DATA_CONST,__got` and 64 rebases chained through `__DATA,__data`. The 64
+rebases matter — a chain of length one never reads the `next` field, so a single
+fixup cannot tell a correct walk from a broken one. That is how a stride bug
+once shipped: `next` was read from the low bits of `target` instead of bit 51,
+and `/usr/bin/ssh` reported 12 fixups where `dyld_info` reported 1024. The same
+check against system binaries now agrees address for address.
 
 ## JSON output
 
@@ -222,18 +228,18 @@ match file {
 
 ```
 fixture                operation                    mean
-ls.x86_64.macho        parse (header+commands)      2.7 us
-ls.x86_64.macho        segments                    14.7 us
-ls.x86_64.macho        symbols                     47.6 us
-ls.fat.macho           parse both slices            6.4 us
-ls.fat.macho           exports, both slices        10.3 us
-sample.dsym            line tables                 39.9 us
-sample.dsym            address lookup              40.1 us
+sample.fat             parse (header+commands)      5.2 us
+sample.fat             segments, both slices       16.4 us
+sample.chains          parse (header+commands)      2.4 us
+sample.chains          chained fixups, 65 slots    22.0 us
+sample.fat             exports, both slices        13.8 us
+sample.dsym            line tables                 37.4 us
+sample.dsym            address lookup              38.0 us
 ```
 
-Parsing is linear in file size. The symbol table dominates the thin file
-because it resolves 93 names through the string table; everything else is a
-single pass over its own section.
+Parsing is linear in file size. The 65-slot chain walk dominates its file: each
+slot is one bounds-checked read plus a decode, and the walk cannot batch them
+because every slot names where the next one is.
 
 ## Testing
 
@@ -246,17 +252,17 @@ Three layers:
 1. **Synthetic buffers** pin down each rejection rule and each format variant.
    No real linker emits an unaligned `cmdsize` or a big-endian PowerPC image,
    so those cases have to be constructed.
-2. **Fixtures** in `internal/fixtures/`, all generated from `sample.c` and
-   `entitled.c` by `make_fixtures.sh`: a universal binary, its slices, an
-   arm64e build, a DWARF 5 dSYM, a DWARF 4 dSYM, and the two entitlement
-   payloads `codesign` wrote.
+2. **Fixtures** in `internal/fixtures/`, all generated from `sample.c`,
+   `chains.c` and `entitled.c` by `make_fixtures.sh`: a universal binary, its
+   slices, an arm64e build, a chain long enough to walk, a DWARF 5 dSYM, a
+   DWARF 4 dSYM, and the two entitlement payloads `codesign` wrote.
 3. **Differential tests** assert values copied from `otool -h`, `otool -f`,
-   `nm`, `codesign -dvv`, `dyld_info -exports` and `dwarfdump --debug-line` run
-   on those same fixtures.
+   `otool -l`, `nm`, `codesign -dvv`, `dyld_info -exports`, `dyld_info -fixups`
+   and `dwarfdump --debug-line` run on those same fixtures.
 
-The suite is 130 tests. `moon test --enable-coverage` plus `moon coverage
-analyze` reports what is not exercised; the remaining gaps are mostly error
-branches for malformed inputs that no fixture can reach.
+The suite is 131 tests, 34 of them differential. `moon test --enable-coverage`
+plus `moon coverage analyze` reports what is not exercised; the remaining gaps
+are mostly error branches for malformed inputs that no fixture can reach.
 
 ## Licence
 

@@ -17,30 +17,33 @@ fn load(name : String) -> Bytes raise {
 /// Fixtures are read once here rather than in a top-level `let`, which cannot
 /// raise.
 fn main raise {
-  let thin_x86 = load("ls.x86_64.macho")
-  let fat_ls = load("ls.fat.macho")
+  let fat = load("sample.fat")
+  let chains = load("sample.chains")
   let dsym = load("sample.dsym")
   println("fixture              operation                mean")
-  report("ls.x86_64.macho", "parse (header+commands)", fn() raise {
-    ignore(@lib.parse(thin_x86))
+  report("sample.fat", "parse (header+commands)", count=20U, fn() raise {
+    ignore(@lib.parse(fat))
   })
-  report("ls.x86_64.macho", "segments", fn() raise {
-    match @lib.parse(thin_x86) {
+  report("sample.fat", "segments, both slices", fn() raise {
+    match @lib.parse(fat) {
+      Fat(slices) =>
+        for s in slices {
+          ignore(@lib.segments(s.image))
+        }
       Thin(s) => ignore(@lib.segments(s))
+    }
+  })
+  report("sample.chains", "parse (header+commands)", fn() raise {
+    ignore(@lib.parse(chains))
+  })
+  report("sample.chains", "chained fixups, 65 slots", fn() raise {
+    match @lib.parse(chains) {
+      Thin(s) => ignore(@lib.fixups(s))
       Fat(_) => ()
     }
   })
-  report("ls.x86_64.macho", "symbols", fn() raise {
-    match @lib.parse(thin_x86) {
-      Thin(s) => ignore(@lib.symbols(s))
-      Fat(_) => ()
-    }
-  })
-  report("ls.fat.macho", "parse both slices", count=20U, fn() raise {
-    ignore(@lib.parse(fat_ls))
-  })
-  report("ls.fat.macho", "exports, both slices", fn() raise {
-    match @lib.parse(fat_ls) {
+  report("sample.fat", "exports, both slices", count=20U, fn() raise {
+    match @lib.parse(fat) {
       Fat(slices) =>
         for s in slices {
           ignore(@lib.exports(s.image))

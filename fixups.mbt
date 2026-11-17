@@ -213,14 +213,23 @@ fn decode_slot(raw : Int64, format : UInt32) -> SlotKind? {
 ///|
 /// The distance in bytes from this slot to the next in its chain.
 ///
-/// Arm64e counts the stride in 8-byte slots and the plain 64-bit formats in
-/// 4-byte words; using the wrong unit walks into the middle of a pointer.
+/// `next` sits at bit 51 in every format; the formats differ only in the width
+/// of the field and the unit its value counts in. Arm64e has 11 bits counting
+/// 8-byte pointers; the plain 64-bit formats have 12 bits counting 4-byte words.
+///
+/// Getting either wrong ends the walk early rather than misreporting a single
+/// slot, which is what makes this worth spelling out: an earlier version read
+/// the plain 64-bit stride from the low 12 bits, which are the low bits of
+/// `target` or `ordinal`. Those are near-always nonzero, so the walk advanced
+/// into the middle of the pointer array and stopped when it hit something that
+/// decoded as `next == 0`. On `/usr/bin/ssh` that found 12 fixups where
+/// `dyld_info` reports 1024.
 fn slot_stride(raw : Int64, format : UInt32) -> Int64 {
   match format {
     CHAINED_PTR_ARM64E
     | CHAINED_PTR_ARM64E_USERLAND
     | CHAINED_PTR_ARM64E_USERLAND24 => ((raw >> 51) & 0x7FFL) * 8L
-    _ => (raw & 0xFFFL) * 4L
+    _ => ((raw >> 51) & 0xFFFL) * 4L
   }
 }
 
@@ -470,8 +479,12 @@ pub fn fixups(slice : MachSlice) -> Array[Fixup] raise MachscopeError {
         if steps > 100_000 {
           raise LimitExceeded(what="fixup chain length", limit=100_000L)
         }
+        // `file_offset_of_address` answers in image-relative terms, which is
+        // what the load commands record. Inside a fat slice that is not where
+        // the bytes sit in the file this cursor reads, so the slice's own start
+        // goes back on.
         let offset = match file_offset_of_address(segs, slot_addr) {
-          Some(o) => o
+          Some(o) => b.start + o
           // A slot outside the segment's file bytes ends the chain: the rest of
           // the segment is zero-fill and holds no pointers.
           None => {
