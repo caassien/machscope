@@ -39,7 +39,7 @@ test "json: a fat file reports one architecture per slice" {
   inspect(archs.length(), content="2")
   // Each entry names the slice's own architecture and the byte range it
   // occupies in the fat file. `otool -f sample.fat` reports the x86_64 slice
-  // first, at offset 4096 with size 8872 and align 2^12.
+  // first, at offset 4096 with size 8816 and align 2^12.
   let first = archs[0]
   match first {
     Object(m) => {
@@ -62,7 +62,7 @@ test "json: a fat file reports one architecture per slice" {
     }
     _ => fail("architecture entry is not an object")
   }
-  // The second entry is the arm64 slice, at offset 16384 with size 33872.
+  // The second entry is the arm64 slice, at offset 16384 with size 33808.
   match archs[1] {
     Object(m) => {
       match m.get("fat_cpu_type") {
