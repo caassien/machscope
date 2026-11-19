@@ -326,24 +326,45 @@ test "reject: a fat slice pointing outside the file" {
 }
 
 ///|
-test "reject: every truncation of a real binary is rejected, never accepted" {
-  // Truncating at any point must produce an error, not a silently short parse.
-  // The loop stops where the file is still longer than the header, because a
-  // file truncated inside its header has nothing meaningful to report anyway.
+test "reject: a truncation inside the command table is rejected" {
+  // `parse` reads the header and frames the load-command table. A cut that
+  // lands inside either must be rejected; a cut that lands after them is a
+  // shorter file with the same commands, and parsing it successfully is the
+  // contract, not a bug.
+  //
+  // The previous version of this test claimed every truncation was rejected
+  // and asserted nothing at all: both match arms were `()`. Measuring it shows
+  // the claim was false from 1099 bytes on — every cut past the command table
+  // parses — so this version asserts the boundary instead of the slogan.
   let full = fixture_bytes("sample.bin")
+  // The table ends at header + sizeofcmds = 32 + 1056.
+  let table_end = 32 + 1056
   let mut t = 32
-  while t < 4096 {
+  while t < table_end {
     let cut = Bytes::from_array(full.to_array().exact_view(start=0, end=t))
     let outcome = Ok(parse(cut)) catch { e => Err(e) }
     match outcome {
-      // Truncation is fine as long as the failure names a real structural
-      // problem rather than an out-of-range read.
+      // No truncation inside the table may parse: a parsed header would
+      // describe commands whose bytes are not there.
+      Ok(_) =>
+        fail(
+          "a cut at \{t} bytes parsed, though the table ends at \{table_end}",
+        )
       Err(_) => ()
-      Ok(_) => ()
     }
     t = t + 97
   }
-  // The whole file still parses after all that.
+  // Past the table the header and commands are intact, so parsing must
+  // succeed: this is what makes parsing a prefix of a file meaningful.
+  let just_past = Bytes::from_array(
+    full.to_array().exact_view(start=0, end=table_end),
+  )
+  let slice = match parse(just_past) {
+    Thin(s) => s
+    Fat(_) => fail("expected a thin image")
+  }
+  inspect(slice.commands.length(), content="17")
+  // And the untruncated file still parses.
   let file = parse(full)
   match file {
     Thin(_) => ()

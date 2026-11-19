@@ -219,3 +219,40 @@ test "reject: a segment claiming more sections than its cmdsize allows" {
     e => fail("unexpected error: \{e}")
   }
 }
+
+///|
+test "address to offset: the byte just past a segment has no file bytes" {
+  // The off-by-one that matters is at the far end. `file_size` bytes are
+  // readable, so `vmaddr + file_size - 1` maps and `vmaddr + file_size` does
+  // not. Tightening the bound from `>=` to `>` leaks that byte of the *next*
+  // segment's data into this one, and every other test still passes: the
+  // existing consistency test stops at the last real byte.
+  let segs = segments_of("sample.bin")
+  for seg in segs {
+    if seg.file_size == 0L {
+      continue
+    }
+    let last = seg.vmaddr + seg.file_size - 1L
+    match file_offset_of_address(segs, last) {
+      Some(v) =>
+        inspect(v, content=(seg.file_offset + seg.file_size - 1L).to_string())
+      None => fail("\{seg.name}: the last byte must map")
+    }
+    let just_past = seg.vmaddr + seg.file_size
+    // If another segment begins exactly there, the address legitimately
+    // belongs to that one instead.
+    let mut owned_by_another = false
+    for other in segs {
+      if other.name == seg.name {
+        continue
+      }
+      if other.contains_address(just_past) && other.file_size > 0L {
+        owned_by_another = true
+      }
+    }
+    if owned_by_another {
+      continue
+    }
+    inspect(file_offset_of_address(segs, just_past) is None, content="true")
+  }
+}

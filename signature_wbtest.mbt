@@ -288,3 +288,174 @@ test "der: a truncated element is rejected" {
     e => fail("unexpected error: \{e}")
   }
 }
+
+///|
+/// Builds a minimal Mach-O whose `LC_CODE_SIGNATURE` points at `superblob`.
+///
+/// The superblob tests need to control which slot holds which blob, and no
+/// real signed binary can be committed for that: `codesign` stamps the current
+/// time into the CMS blob and into the CodeDirectory, so two signings of the
+/// same input differ. A constructed superblob is exact and reproducible.
+fn image_signing(superblob : Bytes) -> MachSlice raise {
+  let header_size = 32
+  let cmd_size = 16
+  let sig_off = header_size + cmd_size
+  let buf = Buffer()
+  buf.write_uint_le(0xFEED_FACF) // MH_MAGIC_64
+  buf.write_int_le(0x0100_000C) // CPU_TYPE_ARM64
+  buf.write_int_le(0)
+  buf.write_uint_le(2) // MH_EXECUTE
+  buf.write_uint_le(1U) // ncmds
+  buf.write_uint_le(cmd_size.reinterpret_as_uint()) // sizeofcmds
+  buf.write_uint_le(0) // flags
+  buf.write_uint_le(0) // reserved
+  buf.write_uint_le(0x1DU) // LC_CODE_SIGNATURE
+  buf.write_uint_le(cmd_size.reinterpret_as_uint())
+  buf.write_uint_le(sig_off.reinterpret_as_uint())
+  buf.write_uint_le(superblob.length().reinterpret_as_uint())
+  for i in 0..<superblob.length() {
+    buf.write_byte(superblob.at(i))
+  }
+  match parse(buf.to_bytes()) {
+    Thin(s) => s
+    Fat(_) => fail("expected thin")
+  }
+}
+
+///|
+/// Assembles a superblob from `(slot, magic, payload)` triples, big-endian as
+/// the format requires.
+fn superblob_of(entries : Array[(UInt32, UInt32, Bytes)]) -> Bytes {
+  let index_size = 12 + entries.length() * 8
+  let buf = Buffer()
+  buf.write_uint_be(0xFADE_0CC0)
+  let mut total = index_size
+  for e in entries {
+    total = total + 8 + e.2.length()
+  }
+  buf.write_uint_be(total.reinterpret_as_uint())
+  buf.write_uint_be(entries.length().reinterpret_as_uint())
+  let mut at = index_size
+  for e in entries {
+    buf.write_uint_be(e.0)
+    buf.write_uint_be(at.reinterpret_as_uint())
+    at = at + 8 + e.2.length()
+  }
+  for e in entries {
+    buf.write_uint_be(e.1)
+    buf.write_uint_be((8 + e.2.length()).reinterpret_as_uint())
+    for i in 0..<e.2.length() {
+      buf.write_byte(e.2.at(i))
+    }
+  }
+  buf.to_bytes()
+}
+
+///|
+test "entitlements: the DER slot is 7 and the XML slot is 5, not the reverse" {
+  // This is the distinction the first review of this project rejected the
+  // submission over, and until this test existed nothing could catch getting
+  // the two numbers backwards: the payload fixtures assert only that a blob
+  // decodes, and both slots' blobs decode the same way.
+  //
+  // The superblob below carries the same payload in slots 5 and 7 with their
+  // distinct magics. Only slot 7 may be read as DER.
+  let der_payload = fixture_bytes("entitlements.der")
+  let xml_payload = fixture_bytes("entitlements.xml")
+  let sb = superblob_of([
+    (0U, 0xFADE_0C02U, Bytes::make(8, b'\x00')), // a CodeDirectory stand-in
+    (5U, 0xFADE_7171U, xml_payload),
+    (7U, 0xFADE_7172U, der_payload),
+    (0x1_0000U, 0xFADE_0B01U, Bytes::make(8, b'\x00')),
+  ])
+  let slice = image_signing(sb)
+  let region = match signature_region(slice) {
+    Some(r) => r
+    None => fail("expected a signature region")
+  }
+  let refs = signature_blobs(slice, region)
+  inspect(refs.length(), content="4")
+  // The index lists slots in order; asserting each is what pins the constants.
+  inspect(refs[0].slot.to_int64(), content="0")
+  inspect(refs[1].slot.to_int64(), content="5")
+  inspect(refs[1].magic.to_int64(), content="4208882033") // 0xfade7171
+  inspect(refs[2].slot.to_int64(), content="7")
+  inspect(refs[2].magic.to_int64(), content="4208882034") // 0xfade7172
+  inspect(refs[3].slot.to_int64(), content="65536")
+  // The decoder prefers slot 7 and returns the DER form, which is a dictionary.
+  match entitlements(slice, region) {
+    Some(e) => {
+      inspect(e.magic.to_int64(), content="4208882034") // 0xfade7172
+      inspect(e.value is Dict(_), content="true")
+      inspect(
+        e.value.get("com.example.counter") is Some(Int(42)),
+        content="true",
+      )
+    }
+    None => fail("expected entitlements")
+  }
+}
+
+///|
+test "entitlements: with only slot 5 present the XML payload comes back" {
+  // The other half of the branch: an image carrying only the XML form must
+  // still yield entitlements, as text rather than a decoded dictionary.
+  let xml_payload = fixture_bytes("entitlements.xml")
+  let sb = superblob_of([
+    (0U, 0xFADE_0C02U, Bytes::make(8, b'\x00')),
+    (5U, 0xFADE_7171U, xml_payload),
+  ])
+  let slice = image_signing(sb)
+  let region = match signature_region(slice) {
+    Some(r) => r
+    None => fail("expected a signature region")
+  }
+  match entitlements(slice, region) {
+    Some(e) => {
+      inspect(e.magic.to_int64(), content="4208882033") // 0xfade7171
+      match e.value {
+        Str(text) =>
+          inspect(text.has_prefix("<?xml version=\"1.0\""), content="true")
+        _ => fail("expected the XML form as a string")
+      }
+    }
+    None => fail("expected entitlements from slot 5 alone")
+  }
+}
+
+///|
+test "entitlements: the CMS slot alone yields none" {
+  // Slot 0x10000 holds the CMS signature over the CodeDirectory. Walking it for
+  // an OCTET STRING and calling the result "entitlements" is the bug that got
+  // the first submission rejected, so an image with only that slot must return
+  // None. `/bin/ls` is the real-world case and is asserted separately above;
+  // this is the constructed one.
+  let sb = superblob_of([
+    (0U, 0xFADE_0C02U, Bytes::make(8, b'\x00')),
+    (0x1_0000U, 0xFADE_0B01U, Bytes::make(64, b'\x7f')),
+  ])
+  let slice = image_signing(sb)
+  let region = match signature_region(slice) {
+    Some(r) => r
+    None => fail("expected a signature region")
+  }
+  inspect(entitlements(slice, region) is None, content="true")
+}
+
+///|
+test "entitlements: a payload whose magic contradicts its slot is ignored" {
+  // The slot number and the magic must both say entitlements. A blob whose
+  // magic says entitlements but which sits in the CMS slot is not one, and
+  // neither is one in slot 5 whose magic belongs to a CodeDirectory.
+  let der_payload = fixture_bytes("entitlements.der")
+  let sb = superblob_of([
+    (5U, 0xFADE_0C02U, der_payload), // wrong magic for slot 5
+    (7U, 0xFADE_7171U, der_payload), // wrong magic for slot 7
+  ])
+  let slice = image_signing(sb)
+  let region = match signature_region(slice) {
+    Some(r) => r
+    None => fail("expected a signature region")
+  }
+  inspect(entitlements(slice, region) is None, content="true")
+}

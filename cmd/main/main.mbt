@@ -298,22 +298,8 @@ fn report(slices : Array[(String, @lib.MachSlice)], mode : Subcommand) -> Unit {
           }
         }
         println("\{arch}: \{list.length()} fixups")
-        for f in list {
-          match f.symbol {
-            Some(sym) => {
-              // `dyld_info` distinguishes these, and so should this: a lazy
-              // bind is not applied at launch, so a list that calls it a bind
-              // would misreport what the loader does before `main` runs.
-              let kind = if f.is_lazy { "lazy-bind" } else { "bind" }
-              println(
-                "  0x\{@lib.hex(f.address)} \{kind} \{sym} (lib \{f.library_ordinal})",
-              )
-            }
-            None =>
-              println(
-                "  0x\{@lib.hex(f.address)} rebase -> 0x\{@lib.hex(f.target)}",
-              )
-          }
+        for line in fixup_lines(list) {
+          println(line)
         }
       }
       Exports => {
@@ -439,4 +425,28 @@ fn report(slices : Array[(String, @lib.MachSlice)], mode : Subcommand) -> Unit {
         }
     }
   }
+}
+
+///|
+/// Renders one fixup as the line the CLI prints.
+///
+/// Kept separate from `report` so it can be asserted without capturing stdout.
+/// The `lazy-bind` label is the part worth pinning down: `dyld_info` draws that
+/// distinction and a caller reading this list needs it, because a lazy bind is
+/// not applied when the image loads.
+fn fixup_lines(list : Array[@lib.Fixup]) -> Array[String] {
+  let out : Array[String] = []
+  for f in list {
+    match f.symbol {
+      Some(sym) => {
+        let kind = if f.is_lazy { "lazy-bind" } else { "bind" }
+        out.push(
+          "  0x\{@lib.hex(f.address)} \{kind} \{sym} (lib \{f.library_ordinal})",
+        )
+      }
+      None =>
+        out.push("  0x\{@lib.hex(f.address)} rebase -> 0x\{@lib.hex(f.target)}")
+    }
+  }
+  out
 }

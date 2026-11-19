@@ -258,3 +258,161 @@ test "oracle: the DWARF 4 and DWARF 5 tables agree on the row count" {
   let five = sample_table()
   inspect(four.rows.length(), content=five.rows.length().to_string())
 }
+
+///|
+/// `segname` / `sectname` fields, exactly 16 bytes each with NUL padding.
+let segname_dwarf : Bytes = Bytes::from_array([
+  b'_', b'_', b'D', b'W', b'A', b'R', b'F', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00',
+  b'\x00', b'\x00', b'\x00', b'\x00',
+])
+
+///|
+/// The section name `__debug_line`, NUL-padded to 16 bytes.
+let sectname_debug_line : Bytes = Bytes::from_array([
+  b'_', b'_', b'd', b'e', b'b', b'u', b'g', b'_', b'l', b'i', b'n', b'e', b'\x00',
+  b'\x00', b'\x00', b'\x00',
+])
+
+///|
+/// Builds a thin Mach-O whose only content is a `__DWARF,__debug_line` section
+/// holding `program`.
+///
+/// A hand-written program is the only way to reach the boundary between a
+/// standard and a special opcode: a compiler never emits the byte equal to
+/// `opcode_base` unless it needs the one-line advance that encoding produces,
+/// and neither of this project's dSYMs happens to contain it. Without a
+/// constructed program, changing `>=` to `>` in the dispatcher is invisible.
+fn image_with_line_program(program : Bytes) -> MachSlice raise {
+  let seg_cmd_size = 72 + 80 // LC_SEGMENT_64 plus one section
+  let header_size = 32
+  let sizeofcmds = seg_cmd_size
+  let section_off = header_size + sizeofcmds
+  let vmaddr = 0x1_0000_0000L
+  let buf = Buffer()
+  buf.write_uint_le(0xFEED_FACF) // MH_MAGIC_64
+  buf.write_int_le(0x0100_000C) // CPU_TYPE_ARM64
+  buf.write_int_le(0)
+  buf.write_uint_le(0x0A) // MH_DSYM
+  buf.write_uint_le(1U) // ncmds
+  buf.write_uint_le(sizeofcmds.reinterpret_as_uint())
+  buf.write_uint_le(0)
+  buf.write_uint_le(0)
+  // LC_SEGMENT_64
+  buf.write_uint_le(0x19U)
+  buf.write_uint_le(seg_cmd_size.reinterpret_as_uint())
+  buf.write_bytes(segname_dwarf)
+  buf.write_uint64_le(vmaddr.reinterpret_as_uint64())
+  buf.write_uint64_le(0x1000UL) // vmsize
+  buf.write_uint64_le(section_off.to_int64().reinterpret_as_uint64()) // fileoff
+  buf.write_uint64_le(program.length().to_int64().reinterpret_as_uint64()) // filesize
+  buf.write_int_le(7) // maxprot rwx
+  buf.write_int_le(7) // initprot
+  buf.write_uint_le(1U) // nsects
+  buf.write_uint_le(0) // flags
+  // section_64: __debug_line in __DWARF
+  buf.write_bytes(sectname_debug_line)
+  buf.write_bytes(segname_dwarf)
+  buf.write_uint64_le(vmaddr.reinterpret_as_uint64()) // addr
+  buf.write_uint64_le(program.length().to_int64().reinterpret_as_uint64()) // size
+  buf.write_uint_le(section_off.reinterpret_as_uint()) // offset
+  buf.write_uint_le(0) // align
+  buf.write_uint_le(0) // reloff
+  buf.write_uint_le(0) // nreloc
+  buf.write_uint_le(0) // flags
+  buf.write_uint_le(0) // reserved1
+  buf.write_uint_le(0) // reserved2
+  buf.write_uint_le(0) // reserved3
+  for i in 0..<program.length() {
+    buf.write_byte(program.at(i))
+  }
+  match parse(buf.to_bytes()) {
+    Thin(s) => s
+    Fat(_) => fail("expected thin")
+  }
+}
+
+///|
+/// A DWARF 4 line program with `opcode_base` 13 and two special opcodes, one of
+/// which is exactly 13.
+///
+/// `opcode_base` 13 means the standard opcodes are 1..12. The byte 13 is the
+/// first *special* opcode, and it means "advance one line, no address change"
+/// because `line_base` is -5 and `line_range` 14: adjusted 0, so line += -5 is
+/// wrong; adjusted 5 would be line += 0. Both readings are legal encodings, and
+/// which one applies is decided by whether the dispatcher tests `>=` or `>`.
+fn program_with_opcode_base() -> Bytes {
+  // After unit_length: version, header_length, the six scalar prologue
+  // fields, twelve standard-opcode lengths, then the string lists.
+  let body = Buffer()
+  // One include directory and one file name, each NUL-terminated, the two
+  // lists separated and terminated by NUL as DWARF 2-4 requires.
+  body.write_byte(b'.')
+  body.write_byte(b'/')
+  body.write_byte(b'\x00')
+  body.write_byte(b'\x00')
+  body.write_byte(b'a')
+  body.write_byte(b'.')
+  body.write_byte(b'c')
+  body.write_byte(b'\x00')
+  body.write_byte(b'\x00')
+  // The opcode stream: advance the address by 16, emit one row with the
+  // special opcode whose value equals opcode_base, then end the sequence.
+  let ops = Buffer()
+  ops.write_byte(b'\x02') // DW_LNS_advance_pc
+  ops.write_byte(b'\x10') // uleb 16
+  ops.write_byte(b'\x0d') // special opcode 13 == opcode_base
+  ops.write_byte(b'\x00') // DW_LNE_end_sequence
+  ops.write_byte(b'\x01') // length
+  ops.write_byte(b'\x01') // extended opcode 1
+  // header_length is measured from the byte after itself, i.e. it covers the
+  // six scalar fields, the twelve standard lengths, and the two string lists.
+  let prologue = body.length() + 6 + 12
+  let out = Buffer()
+  // unit_length, written after everything else is sized.
+  let tail_len = 2 + 4 + prologue + ops.length()
+  out.write_uint_le(tail_len.reinterpret_as_uint())
+  out.write_uint16_le(4) // version
+  out.write_uint_le(prologue.reinterpret_as_uint()) // header_length
+  out.write_byte(b'\x01') // min_inst_length
+  out.write_byte(b'\x01') // max_ops_per_inst
+  out.write_byte(b'\x01') // default_is_stmt
+  out.write_byte(b'\xfb') // line_base -5
+  out.write_byte(b'\x0e') // line_range 14
+  out.write_byte(b'\x0d') // opcode_base 13
+  for _ in 1..<13 {
+    out.write_byte(b'\x00') // standard opcode operand counts
+  }
+  out.write_bytes(body.to_bytes())
+  out.write_bytes(ops.to_bytes())
+  out.to_bytes()
+}
+
+///|
+test "boundary: the byte equal to opcode_base is a special opcode" {
+  // `opcode_base` is the first special opcode, so the dispatcher must compare
+  // with `>=`. Testing `>` sends that one byte down the standard-opcode path,
+  // where it is read as an opcode 13 — which has no case, so it is skipped
+  // silently and the row it should have emitted never appears.
+  //
+  // Neither committed dSYM contains this byte, so only a constructed program
+  // can reach it. That is why this test builds one: a change that flips the
+  // comparison passed the whole suite before it existed.
+  let program = program_with_opcode_base()
+  let slice = image_with_line_program(program)
+  let tables = line_tables(slice, comp_dir="/c")
+  if tables.length() != 1 {
+    fail("expected one line program, got \{tables.length()}")
+  }
+  let t = tables[0]
+  inspect(t.version.to_int64(), content="4")
+  // The program advances the address by 0x10, emits a row at the special
+  // opcode, then ends the sequence. Two live rows plus the end-of-sequence row.
+  let live : Array[LineRow] = []
+  for r in t.rows {
+    if !r.end_sequence {
+      live.push(r)
+    }
+  }
+  inspect(live.length(), content="1")
+  inspect(live[0].address, content="16")
+}

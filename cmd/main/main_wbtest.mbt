@@ -118,3 +118,51 @@ test "header: the summary line names the architecture and the header kind" {
   inspect(lines[1].contains("MH_MAGIC_64"), content="true")
   inspect(lines[1].contains("little-endian"), content="true")
 }
+
+///|
+test "fixups: the printed lines name the kind the way dyld_info does" {
+  // A lazy bind and a plain bind look the same in the struct apart from the
+  // `is_lazy` flag, and `dyld_info` labels them differently for a reason: a
+  // lazy slot is not resolved until the first call through it. Rendering both
+  // as `bind` would tell a reader the loader patches that slot at launch.
+  let binds : Array[@lib.Fixup] = [
+    @lib.Fixup::{
+      address: 0x1_0000_4000L,
+      target: 0L,
+      import_index: Some(0L),
+      symbol: Some("_printf"),
+      library_ordinal: 1U,
+      key: 0U,
+      diversity: 0U,
+      has_discriminator: false,
+      is_lazy: false,
+    },
+    @lib.Fixup::{
+      address: 0x1_0000_5000L,
+      target: 0L,
+      import_index: Some(1L),
+      symbol: Some("_puts"),
+      library_ordinal: 2U,
+      key: 0U,
+      diversity: 0U,
+      has_discriminator: false,
+      is_lazy: true,
+    },
+    @lib.Fixup::{
+      address: 0x1_0000_6000L,
+      target: 0x1_0000_0123L,
+      import_index: None,
+      symbol: None,
+      library_ordinal: 0U,
+      key: 0U,
+      diversity: 0U,
+      has_discriminator: false,
+      is_lazy: false,
+    },
+  ]
+  let lines = fixup_lines(binds)
+  inspect(lines.length(), content="3")
+  inspect(lines[0], content="  0x100004000 bind _printf (lib 1)")
+  inspect(lines[1], content="  0x100005000 lazy-bind _puts (lib 2)")
+  inspect(lines[2], content="  0x100006000 rebase -> 0x100000123")
+}

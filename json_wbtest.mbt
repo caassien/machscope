@@ -6,9 +6,18 @@
 
 ///|
 /// Parses a fixture and builds its JSON report.
-fn report_of(name : String, segments_~ : Bool = false) -> Json raise {
+///
+/// `fixups_` is a parameter rather than always-on because the earlier version
+/// of this helper never requested it, which is how `file_report`'s Fat branch
+/// dropping the flag went unnoticed: no test ever asked a fat file for its
+/// fixups in JSON.
+fn report_of(
+  name : String,
+  segments_~ : Bool = false,
+  fixups_~ : Bool = false,
+) -> Json raise {
   let file = parse(fixture_bytes(name))
-  file_report(file, segments_~, symbols_=true, exports_=true)
+  file_report(file, segments_~, symbols_=true, exports_=true, fixups_~)
 }
 
 ///|
@@ -269,4 +278,134 @@ test "json: the report round-trips through the parser" {
     Ok(_) => ()
     Err(e) => fail("output is not valid JSON: \{e.to_string()}")
   }
+}
+
+///|
+test "json: a thin file reports its fixups when asked" {
+  let j = report_of("sample.bin", fixups_=true)
+  let archs = match j {
+    Object(m) =>
+      match m.get("architectures") {
+        Some(Array(list)) => list
+        _ => fail("no architectures")
+      }
+    _ => fail("report is not an object")
+  }
+  let fixups = match archs[0] {
+    Object(a) =>
+      match a.get("fixups") {
+        Some(Array(f)) => f
+        _ => fail("no fixups key")
+      }
+    _ => fail("architecture is not an object")
+  }
+  inspect(fixups.length(), content="1")
+  match fixups[0] {
+    Object(f) => {
+      // The one fixup in `sample.bin` is the `_printf` bind at 0x100004000.
+      match f.get("address") {
+        Some(String(a)) => inspect(a, content="0x100004000")
+        _ => fail("fixup address is not a hex string")
+      }
+      match f.get("kind") {
+        Some(String(k)) => inspect(k, content="bind")
+        _ => fail("no kind")
+      }
+      match f.get("symbol") {
+        Some(String(s)) => inspect(s, content="_printf")
+        _ => fail("no symbol")
+      }
+    }
+    _ => fail("fixup is not an object")
+  }
+}
+
+///|
+test "json: a fat file reports each slice's fixups" {
+  // This is the case the Fat branch of `file_report` used to drop: it passed
+  // `segments_`, `symbols_` and `exports_` down to `slice_report` and forgot
+  // `fixups_`, so `--json --fixups` on a universal binary printed the header
+  // and nothing else. A thin file still worked, so it took a fat fixture to see.
+  let j = report_of("sample.fat", fixups_=true)
+  let archs = match j {
+    Object(m) =>
+      match m.get("architectures") {
+        Some(Array(list)) => list
+        _ => fail("no architectures")
+      }
+    _ => fail("report is not an object")
+  }
+  inspect(archs.length(), content="2")
+  for arch in archs {
+    match arch {
+      Object(a) =>
+        match a.get("fixups_error") {
+          Some(_) => fail("fixup walk failed on a fixture that should decode")
+          None => ()
+        }
+      _ => fail("architecture is not an object")
+    }
+  }
+  match archs[1] {
+    Object(a) =>
+      match a.get("fixups") {
+        Some(Array(f)) => {
+          inspect(f.length(), content="1")
+          match f[0] {
+            Object(fx) =>
+              match fx.get("address") {
+                Some(String(addr)) => inspect(addr, content="0x100004000")
+                _ => fail("fixup address is not a hex string")
+              }
+            _ => fail("fixup is not an object")
+          }
+        }
+        _ => fail("the arm64 slice has no fixups key")
+      }
+    _ => fail("architecture is not an object")
+  }
+}
+
+///|
+test "json: a classic dyld-info image reports its fixups too" {
+  // The two encodings share the same JSON shape, so a consumer does not have
+  // to know which one produced the file.
+  let j = report_of("sample.classic", fixups_=true)
+  let archs = match j {
+    Object(m) =>
+      match m.get("architectures") {
+        Some(Array(list)) => list
+        _ => fail("no architectures")
+      }
+    _ => fail("report is not an object")
+  }
+  let fixups = match archs[0] {
+    Object(a) =>
+      match a.get("fixups") {
+        Some(Array(f)) => f
+        _ => fail("no fixups key")
+      }
+    _ => fail("architecture is not an object")
+  }
+  inspect(fixups.length(), content="6")
+  // `kind` has to distinguish a lazy bind, or a consumer cannot tell which
+  // slots dyld resolves at launch.
+  let kinds : Map[String, Int32] = Map([])
+  for f in fixups {
+    match f {
+      Object(o) =>
+        match o.get("kind") {
+          Some(String(k)) =>
+            match kinds.get(k) {
+              Some(n) => kinds[k] = n + 1
+              None => kinds[k] = 1
+            }
+          _ => fail("no kind")
+        }
+      _ => fail("fixup is not an object")
+    }
+  }
+  inspect(kinds["rebase"], content="4")
+  inspect(kinds["bind"], content="1")
+  inspect(kinds["lazy-bind"], content="1")
 }

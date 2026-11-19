@@ -547,3 +547,29 @@ test "classic: a chained image is not reported as using the old encoding" {
   inspect(dyld_info(slice) is None, content="true")
   inspect(chained_fixups(slice) is Some(_), content="true")
 }
+
+///|
+test "constants: the pointer format numbers match mach-o/fixup-chains.h" {
+  // Every other test refers to these by name, so changing a constant's value
+  // changes the test's own argument and both sides move together. Nothing then
+  // fails, and the parser reads a real binary's format number as some other
+  // format. Asserting the numbers themselves is what makes them facts rather
+  // than parameters.
+  //
+  //   DYLD_CHAINED_PTR_ARM64E                1
+  //   DYLD_CHAINED_PTR_64                    2
+  //   DYLD_CHAINED_PTR_64_OFFSET             6
+  //   DYLD_CHAINED_PTR_ARM64E_USERLAND       9
+  //   DYLD_CHAINED_PTR_ARM64E_FIRMWARE      10
+  //   DYLD_CHAINED_PTR_ARM64E_USERLAND24    12
+  inspect(CHAINED_PTR_ARM64E.to_int64(), content="1")
+  inspect(CHAINED_PTR_64.to_int64(), content="2")
+  inspect(CHAINED_PTR_64_OFFSET.to_int64(), content="6")
+  inspect(CHAINED_PTR_ARM64E_USERLAND.to_int64(), content="9")
+  inspect(CHAINED_PTR_ARM64E_FIRMWARE.to_int64(), content="10")
+  inspect(CHAINED_PTR_ARM64E_USERLAND24.to_int64(), content="12")
+  // The import formats, likewise from the header.
+  inspect(CHAINED_IMPORT_FORMAT.to_int64(), content="1")
+  // And the load command itself.
+  inspect(LC_DYLD_CHAINED_FIXUPS.to_int64(), content="2147483700") // 0x80000034
+}

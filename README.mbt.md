@@ -28,6 +28,8 @@ $ moon run cmd/main -- --sections internal/fixtures/sample.bin
   __TEXT  vmaddr 0x100000000  vmsize 0x4000  fileoff 0  filesize 16384
     __text  addr 0x100000460  size 200  offset 1120
     __stubs  addr 0x100000528  size 12  offset 1320
+    __cstring  addr 0x100000534  size 4  offset 1332
+    __unwind_info  addr 0x100000538  size 96  offset 1336
   __DATA_CONST  vmaddr 0x100004000  vmsize 0x4000  fileoff 16384  filesize 16384
     __got  addr 0x100004000  size 8  offset 16384
 ```
