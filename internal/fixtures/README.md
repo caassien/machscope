@@ -17,6 +17,8 @@ of them in its own output.
 | `sample.chains` | `chains.c` for arm64: 65 fixups in two chains, so a walk that mis-strides is visible |
 | `classic.c` | source for the pre-chained-fixup fixture |
 | `sample.classic` | `classic.c` for x86_64: `LC_DYLD_INFO_ONLY` opcode streams, no chained fixups |
+| `weak.c` | source for the weak-export fixture |
+| `sample.weak` | `weak.c` for arm64: one weak and one strong definition, so the export flag has a set bit to read |
 | `sample.dsym` | the dSYM companion `dsymutil` produced for the arm64 slice |
 | `sample.dwarf4` | the same program emitted with `-gdwarf-4`, so the pre-5 line-table layout is exercised |
 | `entitled.c` | source for the binary the entitlement blobs were taken from |
@@ -50,6 +52,13 @@ the unauthenticated pointer formats; arm64e is what makes clang emit
 `DYLD_CHAINED_PTR_ARM64E_USERLAND24` slots with a signing key and an address
 discriminator, which is the branch of `decode_slot` that would otherwise be
 dead code as far as the tests are concerned.
+
+`sample.weak` exists because a flag that is never set cannot be tested by
+asserting it is clear. `EXPORT_SYMBOL_FLAGS_WEAK_DEFINITION` was untested until
+this file existed: every export in every other fixture is a strong definition,
+so changing the constant the flag is read with broke nothing. `dyld_info
+-exports sample.weak` marks `_weak_thing` with `[weak-def]` and leaves
+`_normal_thing` plain.
 
 `sample.classic` covers the other fixup encoding. Before chained fixups, an
 image described its relocations with two opcode streams named by

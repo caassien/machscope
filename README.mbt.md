@@ -275,17 +275,24 @@ Three layers:
    No real linker emits an unaligned `cmdsize` or a big-endian PowerPC image,
    so those cases have to be constructed.
 2. **Fixtures** in `internal/fixtures/`, all generated from `sample.c`,
-   `chains.c`, `classic.c` and `entitled.c` by `make_fixtures.sh`: a universal
-   binary, its slices, an arm64e build, a chain long enough to walk, one image
-   using the pre-chained-fixup `LC_DYLD_INFO` encoding, a DWARF 5 dSYM, a
-   DWARF 4 dSYM, and the two entitlement payloads `codesign` wrote.
+   `chains.c`, `classic.c`, `weak.c` and `entitled.c` by `make_fixtures.sh`:
+   a universal binary, its slices, an arm64e build, a chain long enough to
+   walk, one image using the pre-chained-fixup `LC_DYLD_INFO` encoding, one
+   with a weak export, a DWARF 5 dSYM, a DWARF 4 dSYM, and the two entitlement
+   payloads `codesign` wrote.
 3. **Differential tests** assert values copied from `otool -h`, `otool -f`,
    `otool -l`, `nm`, `codesign -dvv`, `dyld_info -exports`, `dyld_info -fixups`
    and `dwarfdump --debug-line` run on those same fixtures.
 
-The suite is 133 tests, 35 of them differential. `moon test --enable-coverage`
+The suite is 145 tests, 36 of them differential. `moon test --enable-coverage`
 plus `moon coverage analyze` reports what is not exercised; the remaining gaps
 are mostly error branches for malformed inputs that no fixture can reach.
+
+Coverage counts lines, not claims, so the tests were also checked the other
+way: mutate a constant or a boundary in the source and confirm something fails.
+That is how several of these tests were found to assert nothing, and how the
+missing fixtures above were identified — a bit that is never set, or a byte a
+compiler never emits, cannot be tested by a file a compiler produced.
 
 ## Licence
 
