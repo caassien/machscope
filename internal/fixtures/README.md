@@ -15,6 +15,8 @@ of them in its own output.
 | `sample.arm64e` | the same program built with `-arch arm64e`, so the authenticated-pointer fixup path is reachable |
 | `chains.c` | source for the long-chain fixture |
 | `sample.chains` | `chains.c` for arm64: 65 fixups in two chains, so a walk that mis-strides is visible |
+| `classic.c` | source for the pre-chained-fixup fixture |
+| `sample.classic` | `classic.c` for x86_64: `LC_DYLD_INFO_ONLY` opcode streams, no chained fixups |
 | `sample.dsym` | the dSYM companion `dsymutil` produced for the arm64 slice |
 | `sample.dwarf4` | the same program emitted with `-gdwarf-4`, so the pre-5 line-table layout is exercised |
 | `entitled.c` | source for the binary the entitlement blobs were taken from |
@@ -48,6 +50,14 @@ the unauthenticated pointer formats; arm64e is what makes clang emit
 `DYLD_CHAINED_PTR_ARM64E_USERLAND24` slots with a signing key and an address
 discriminator, which is the branch of `decode_slot` that would otherwise be
 dead code as far as the tests are concerned.
+
+`sample.classic` covers the other fixup encoding. Before chained fixups, an
+image described its relocations with two opcode streams named by
+`LC_DYLD_INFO_ONLY`; the linker emits chained fixups by default now, so the
+fixture is built with `-no_fixup_chains`. Without it the classic decoder had no
+test, which is how a version that returned an empty array for such images looked
+correct: every fixture happened to be chained. In `/usr/bin` there are 71 slices
+that take the classic path, including `ls`, `cp` and `mv`.
 
 `sample.chains` exists for a different reason, and it is a bug this repository
 shipped. `next` — the field giving the distance to the next slot — sits at bit

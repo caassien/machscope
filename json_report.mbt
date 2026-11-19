@@ -160,7 +160,17 @@ pub fn slice_report(
 pub fn Fixup::to_json(self : Fixup) -> Json {
   let fields : Map[String, Json] = Map([])
   fields["address"] = Json::string("0x\{hex(self.address)}")
-  fields["kind"] = Json::string(if self.is_bind() { "bind" } else { "rebase" })
+  fields["kind"] = Json::string(
+    if self.is_bind() {
+      if self.is_lazy {
+        "lazy-bind"
+      } else {
+        "bind"
+      }
+    } else {
+      "rebase"
+    },
+  )
   match self.symbol {
     Some(s) => fields["symbol"] = Json::string(s)
     None => ()
@@ -253,7 +263,13 @@ pub fn file_report(
         // The slice's own placement in the file is merged into the same object
         // as its image, so that a consumer reads `architectures[i].header` and
         // `architectures[i].symbols` whichever kind of file it was given.
-        let inner = slice_report(s.image, segments_~, symbols_~, exports_~)
+        let inner = slice_report(
+          s.image,
+          segments_~,
+          symbols_~,
+          exports_~,
+          fixups_~,
+        )
         let fields : Map[String, Json] = match inner {
           Object(m) => m
           _ => Map([])

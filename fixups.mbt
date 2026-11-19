@@ -111,12 +111,21 @@ pub(all) struct Fixup {
   diversity : UInt32
   /// Whether the slot also carries an address discriminator bit.
   has_discriminator : Bool
+  /// Set for a lazy bind: a slot in `__la_symbol_ptr` that dyld leaves alone at
+  /// load time and resolves on first call instead. It is still a bind, but a
+  /// tool asking "what does the loader do at launch" wants it excluded, so the
+  /// distinction is kept rather than flattened into `is_bind`.
+  is_lazy : Bool
 }
 
 ///|
 /// Whether the fixup is a bind rather than a rebase.
+///
+/// A chained bind names its import by index; a classic bind names it by symbol
+/// string and has no index at all, so the symbol is what decides there. Testing
+/// only `import_index` classified every classic bind as a rebase.
 pub fn Fixup::is_bind(self : Fixup) -> Bool {
-  self.import_index is Some(_)
+  self.import_index is Some(_) || self.symbol is Some(_)
 }
 
 ///|
@@ -268,7 +277,10 @@ pub fn chained_fixups(slice : MachSlice) -> ChainedFixups? raise MachscopeError 
     // uses a different encoding this version does not decode.
     raise Unsupported(what="compressed symbol pool")
   }
-  if imports_format != CHAINED_IMPORT_FORMAT && imports_format != 3U {
+  // 1 = DYLD_CHAINED_IMPORT, 2 = _ADDEND, 3 = _ADDEND64. All three appear in
+  // shipping binaries: the arm64 slice of `/usr/bin/afclip` uses 2 while the
+  // x86_64 slice uses 1, and `afconvert` uses 3.
+  if imports_format < 1U || imports_format > 3U {
     raise Unsupported(what="chained import format")
   }
   let symbols_at = region_off + symbols_off.to_int64()
@@ -291,8 +303,11 @@ pub fn chained_fixups(slice : MachSlice) -> ChainedFixups? raise MachscopeError 
 ///|
 /// Reads the import table.
 ///
-/// The 4-byte format packs a 4-bit library ordinal above a 24-bit symbol
-/// offset; the 8-byte format widens both and adds a weak bit.
+/// `DYLD_CHAINED_IMPORT` is one word: an 8-bit library ordinal, a reserved bit
+/// and a 23-bit symbol offset. `DYLD_CHAINED_IMPORT_ADDEND` and
+/// `_ADDEND64` are two words: the same fields widened to 16 and 32 bits, then a
+/// 32-bit flags word and a 64-bit addend. The entry sizes differ, which is why
+/// the loop reads a fixed shape per format rather than a variable one.
 fn read_imports(
   b : Bounds,
   at : Int64,
@@ -302,7 +317,15 @@ fn read_imports(
   limit : Int64,
 ) -> Array[ChainedImport] raise MachscopeError {
   let e = Endian::Little
-  let entry = if format == CHAINED_IMPORT_FORMAT { 4L } else { 8L }
+  // 4 bytes packed, 8 with a separate flags word, 16 when a 64-bit addend
+  // follows the flags.
+  let entry = if format == CHAINED_IMPORT_FORMAT {
+    4L
+  } else if format == 3U {
+    16L
+  } else {
+    8L
+  }
   b.require(at, entry * count.to_int64(), "chained imports")
   let out : Array[ChainedImport] = []
   let mut pos = at
@@ -310,26 +333,32 @@ fn read_imports(
     let c = Cursor::{ pos, endian: e, }
     let (raw, c) = b.read_u32(c)
     let raw64 = raw.to_int64()
+    let _ = c
     // DYLD_CHAINED_IMPORT packs three fields into one word: the library
     // ordinal in the low 8 bits, a single reserved bit, and the symbol's offset
     // into the pool in the remaining 23. Reading the offset from bit 8 rather
     // than bit 9 doubles every name offset and lands one character into the
     // neighbouring string.
     let ordinal = if format == CHAINED_IMPORT_FORMAT {
-      let raw_ordinal = raw64 & 0xFFL
-      // Values above 0xF0 are two's-complement negative ordinals naming
-      // libraries the linker synthesised.
-      if raw_ordinal > 0xF0L {
-        raise Unsupported(what="negative library ordinal in chained import")
-      }
-      raw_ordinal.to_int().reinterpret_as_uint()
+      // lib_ordinal is `int8` in `dyld_chained_import`, so 0x80..0xFF are the
+      // negative special ordinals (SELF, MAIN_EXECUTABLE, FLAT_LOOKUP,
+      // WEAK_LOOKUP). They are valid and mean "not a dylib"; reporting them as
+      // an error rejected every binary that uses one, which is most of the
+      // system's tools. Widening to `UInt32` keeps them distinguishable, which
+      // is what the library-ordinal field is for.
+      (raw64 & 0xFFL).to_int().reinterpret_as_uint()
     } else {
       raw64.to_int().reinterpret_as_uint()
     }
-    let name_off = if format == CHAINED_IMPORT_FORMAT {
+    // `dyld_chained_import_addend` reuses the first word's field positions, so the
+    // name offset moves from bit 9 to bit 16 only in the 64-bit variant;
+    // `_ADDEND` (format 2) keeps bit 9. Getting this wrong reads the name from the
+    // middle of the preceding one, which is how "unsupported" turned into
+    // "garbage" the first time this branch was written.
+    let name_off = if format == CHAINED_IMPORT_FORMAT || format == 2U {
       (raw64 >> 9) & 0x007F_FFFFL
     } else {
-      (raw64 >> 32) & 0xFFFF_FFFFL
+      (raw64 >> 16) & 0xFFFF_FFFFL
     }
     let mut c2 = c
     let mut weak = false
@@ -337,6 +366,11 @@ fn read_imports(
       let (flags, c3) = b.read_u32(c2)
       weak = (flags.to_int64() & 0x1L) != 0L
       c2 = c3
+      if format == 3U {
+        // `_ADDEND64` carries a 64-bit addend after the flags.
+        let (_, c4) = b.read_u64(c2)
+        c2 = c4
+      }
     }
     let name = read_pool_string(b, symbols_at + name_off, limit)
     out.push(ChainedImport::{
@@ -441,9 +475,33 @@ fn read_segment_chains(
 pub fn fixups(slice : MachSlice) -> Array[Fixup] raise MachscopeError {
   let index = match chained_fixups(slice) {
     Some(c) => c
-    None => return []
+    // No chained fixups. Older images describe the same relocations with the
+    // `LC_DYLD_INFO` opcode streams instead, and x86_64 slices of universal
+    // binaries still do; returning an empty array there would report "this
+    // image has no fixups", which is a different and wrong answer.
+    None => return classic_fixups(slice)
   }
   let segs = segments(slice)
+  // The address an offset-form rebase counts from: the lowest mapped address,
+  // which is where dyld loads the image. `__PAGEZERO` maps from zero and has no
+  // file bytes, so it is skipped; every other segment follows it.
+  let mut image_base = 0L
+  let mut base_set = false
+  for seg in segs {
+    if seg.file_size == 0L && seg.name == "__PAGEZERO" {
+      continue
+    }
+    if !base_set || seg.vmaddr < image_base {
+      image_base = seg.vmaddr
+      base_set = true
+    }
+  }
+  let mut image_end = image_base
+  for seg in segs {
+    if seg.vmaddr + seg.vmsize > image_end {
+      image_end = seg.vmaddr + seg.vmsize
+    }
+  }
   let out : Array[Fixup] = []
   let b = slice.bounds
   let e = slice.header.kind.endian()
@@ -513,18 +571,31 @@ pub fn fixups(slice : MachSlice) -> Array[Fixup] raise MachscopeError {
                   key,
                   diversity,
                   has_discriminator,
+                  is_lazy: false,
                 })
               }
               SlotKind::Rebase(target, key, diversity, has_discriminator) =>
                 out.push(Fixup::{
                   address: slot_addr,
-                  target,
+                  // A plain 64-bit rebase stores a *virtual address* in its 36
+                  // target bits. An arm64e one stores a 32- or 43-bit offset
+                  // from the image base instead. `dyld_info` prints both as
+                  // final addresses, so the offset form is rebased here; doing
+                  // it in `decode_slot` would make that function depend on the
+                  // segment table, which is not where bit layout belongs.
+                  target: resolve_rebase_target(
+                    target,
+                    chains.pointer_format,
+                    image_base,
+                    image_end,
+                  ),
                   import_index: None,
                   symbol: None,
                   library_ordinal: 0U,
                   key,
                   diversity,
                   has_discriminator,
+                  is_lazy: false,
                 })
             }
           None => raise Unsupported(what="chained pointer format")
@@ -554,4 +625,544 @@ fn lookup_import(
     return None
   }
   Some(imports[index.to_int()])
+}
+
+// Classic dyld info.
+//
+// Before chained fixups, an image described its own relocations with two opcode
+// streams named by `LC_DYLD_INFO` / `LC_DYLD_INFO_ONLY`: one for rebases, one
+// for binds. Each stream is a small bytecode over a cursor that walks the
+// image's address space; the opcodes say where to set the cursor, mask it, and
+// then emit a fixup at it.
+//
+// This is a different encoding of the same information, not a different
+// question, so it decodes into the same `Fixup`. The reason it has to be
+// decoded at all is that x86_64 slices of universal binaries still use it:
+// `ls`, `cp`, `mv` and 68 others in `/usr/bin` carry no `LC_DYLD_CHAINED_FIXUPS`,
+// and a parser that only knows the chained form reports them as having no
+// fixups rather than as being unreadable.
+
+///|
+/// `REBASE_OPCODE_MASK`: the opcode is the high nibble of the byte.
+const REBASE_OPCODE_MASK : UInt32 = 0xF0
+
+///|
+/// `REBASE_IMMEDIATE_MASK`: the low nibble is an immediate operand, or the
+/// count for the `*_IMM` forms.
+const REBASE_IMMEDIATE_MASK : UInt32 = 0x0F
+
+///|
+/// `REBASE_OPCODE_DONE`: the end of the stream.
+const REBASE_OPCODE_DONE : UInt32 = 0x00
+
+///|
+/// `REBASE_OPCODE_SET_TYPE_IMM`.
+const REBASE_OPCODE_SET_TYPE_IMM : UInt32 = 0x10
+
+///|
+/// `REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB`.
+const REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB : UInt32 = 0x20
+
+///|
+/// `REBASE_OPCODE_ADD_ADDR_ULEB`.
+const REBASE_OPCODE_ADD_ADDR_ULEB : UInt32 = 0x30
+
+///|
+/// `REBASE_OPCODE_ADD_ADDR_IMM_SCALED`.
+const REBASE_OPCODE_ADD_ADDR_IMM_SCALED : UInt32 = 0x40
+
+///|
+/// `REBASE_OPCODE_DO_REBASE_IMM_TIMES`.
+const REBASE_OPCODE_DO_REBASE_IMM_TIMES : UInt32 = 0x50
+
+///|
+/// `REBASE_OPCODE_DO_REBASE_ULEB_TIMES`.
+const REBASE_OPCODE_DO_REBASE_ULEB_TIMES : UInt32 = 0x60
+
+///|
+/// `REBASE_OPCODE_DO_REBASE_ADD_ADDR_ULEB`.
+const REBASE_OPCODE_DO_REBASE_ADD_ADDR_ULEB : UInt32 = 0x70
+
+///|
+/// `REBASE_OPCODE_DO_REBASE_ULEB_TIMES_SKIPPING_ULEB`.
+const REBASE_OPCODE_DO_REBASE_ULEB_TIMES_SKIPPING_ULEB : UInt32 = 0x80
+
+///|
+/// `BIND_OPCODE_MASK`.
+const BIND_OPCODE_MASK : UInt32 = 0xF0
+
+///|
+/// `BIND_IMMEDIATE_MASK`.
+const BIND_IMMEDIATE_MASK : UInt32 = 0x0F
+
+///|
+/// `BIND_OPCODE_DONE`.
+const BIND_OPCODE_DONE : UInt32 = 0x00
+
+///|
+/// `BIND_OPCODE_SET_DYLIB_ORDINAL_IMM`.
+const BIND_OPCODE_SET_DYLIB_ORDINAL_IMM : UInt32 = 0x10
+
+///|
+/// `BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB`.
+const BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB : UInt32 = 0x20
+
+///|
+/// `BIND_OPCODE_SET_DYLIB_SPECIAL_IMM`.
+const BIND_OPCODE_SET_DYLIB_SPECIAL_IMM : UInt32 = 0x30
+
+///|
+/// `BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM`.
+const BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM : UInt32 = 0x40
+
+///|
+/// `BIND_OPCODE_SET_TYPE_IMM`.
+const BIND_OPCODE_SET_TYPE_IMM : UInt32 = 0x50
+
+///|
+/// `BIND_OPCODE_SET_ADDEND_SLEB`.
+const BIND_OPCODE_SET_ADDEND_SLEB : UInt32 = 0x60
+
+///|
+/// `BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB`.
+const BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB : UInt32 = 0x70
+
+///|
+/// `BIND_OPCODE_ADD_ADDR_ULEB`.
+const BIND_OPCODE_ADD_ADDR_ULEB : UInt32 = 0x80
+
+///|
+/// `BIND_OPCODE_DO_BIND`.
+const BIND_OPCODE_DO_BIND : UInt32 = 0x90
+
+///|
+/// `BIND_OPCODE_DO_BIND_ADD_ADDR_ULEB`.
+const BIND_OPCODE_DO_BIND_ADD_ADDR_ULEB : UInt32 = 0xA0
+
+///|
+/// `BIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED`.
+const BIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED : UInt32 = 0xB0
+
+///|
+/// `BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB`.
+const BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB : UInt32 = 0xC0
+
+///|
+/// The four `rebase_*`/`bind_*` region pairs of a classic `LC_DYLD_INFO`.
+pub(all) struct DyldInfo {
+  /// `rebase_off`: file offset of the rebase opcode stream.
+  rebase_off : Int64
+  /// `rebase_size`: byte length of the rebase stream.
+  rebase_size : Int64
+  /// `bind_off`: file offset of the non-lazy bind stream.
+  bind_off : Int64
+  /// `bind_size`: byte length of the bind stream.
+  bind_size : Int64
+  /// `weak_bind_off`: file offset of the weak bind stream.
+  weak_bind_off : Int64
+  /// `weak_bind_size`: byte length of the weak bind stream.
+  weak_bind_size : Int64
+  /// `lazy_bind_off`: file offset of the lazy bind stream.
+  lazy_bind_off : Int64
+  /// `lazy_bind_size`: byte length of the lazy bind stream.
+  lazy_bind_size : Int64
+}
+
+///|
+/// Reads the `LC_DYLD_INFO` / `LC_DYLD_INFO_ONLY` command, if there is one.
+pub fn dyld_info(slice : MachSlice) -> DyldInfo? raise MachscopeError {
+  for cmd in slice.commands {
+    if cmd.cmd != LC_DYLD_INFO && cmd.cmd != LC_DYLD_INFO_ONLY {
+      continue
+    }
+    let body = command_payload(slice, cmd)
+    let e = slice.header.kind.endian()
+    let mut c = Cursor::{ pos: body.start, endian: e, }
+    let (rebase_off, c1) = body.read_u32(c)
+    let (rebase_size, c2) = body.read_u32(c1)
+    let (bind_off, c3) = body.read_u32(c2)
+    let (bind_size, c4) = body.read_u32(c3)
+    let (weak_bind_off, c5) = body.read_u32(c4)
+    let (weak_bind_size, c6) = body.read_u32(c5)
+    let (lazy_bind_off, c7) = body.read_u32(c6)
+    let (lazy_bind_size, c8) = body.read_u32(c7)
+    c = c8
+    let _ = c
+    let base = slice.bounds.start
+    return Some(DyldInfo::{
+      rebase_off: base + rebase_off.to_int64(),
+      rebase_size: rebase_size.to_int64(),
+      bind_off: base + bind_off.to_int64(),
+      bind_size: bind_size.to_int64(),
+      weak_bind_off: base + weak_bind_off.to_int64(),
+      weak_bind_size: weak_bind_size.to_int64(),
+      lazy_bind_off: base + lazy_bind_off.to_int64(),
+      lazy_bind_size: lazy_bind_size.to_int64(),
+    })
+  }
+  None
+}
+
+///|
+/// Whether this slice describes its relocations with the classic
+/// `LC_DYLD_INFO` opcode streams rather than chained fixups.
+///
+/// The distinction matters to a caller because `fixups` returns an empty array
+/// for a slice that has neither, and "this image has no fixups" and "this image
+/// uses an encoding the parser does not read" are different answers.
+pub fn uses_classic_dyld_info(slice : MachSlice) -> Bool raise MachscopeError {
+  match chained_fixups(slice) {
+    Some(_) => false
+    None => dyld_info(slice) is Some(_)
+  }
+}
+
+///|
+/// Turns a segment index and an in-segment offset into an offset inside the
+/// whole file.
+///
+/// The opcode streams address memory, not files; a slot in a zero-fill part of
+/// a segment has no bytes to read and no fixup to report. `base` is the slice's
+/// own start, which is what turns the load command's image-relative
+/// `file_offset` into a position in the buffer this parser reads from.
+fn classic_file_offset(
+  segs : Array[Segment],
+  seg_index : Int64,
+  seg_offset : Int64,
+  base : Int64,
+) -> Int64? {
+  if seg_index < 0L || seg_index >= segs.length().to_int64() {
+    return None
+  }
+  let seg = segs[seg_index.to_int()]
+  if seg_offset < 0L || seg_offset >= seg.file_size {
+    return None
+  }
+  Some(base + seg.file_offset + seg_offset)
+}
+
+///|
+/// Walks a classic rebase opcode stream.
+fn walk_rebases(
+  b : Bounds,
+  start : Int64,
+  size : Int64,
+  segs : Array[Segment],
+  out : Array[Fixup],
+) -> Unit raise MachscopeError {
+  if size == 0L {
+    return
+  }
+  b.require(start, size, "rebase opcodes")
+  let e = b.read_u32(Cursor::{ pos: start, endian: Endian::Little, })
+  let _ = e
+  let mut cur = Cursor::{ pos: start, endian: Endian::Little, }
+  let end = start + size
+  let mut seg_index = 0L
+  let mut seg_offset = 0L
+  let mut steps = 0
+  let mut done = false
+  while !done && cur.pos < end {
+    steps = steps + 1
+    if steps > 1_000_000 {
+      raise LimitExceeded(what="rebase opcode count", limit=1_000_000L)
+    }
+    let (byte, c1) = b.read_u8(cur)
+    cur = c1
+    let opcode = byte & REBASE_OPCODE_MASK
+    let imm = (byte & REBASE_IMMEDIATE_MASK).to_int64()
+    match opcode {
+      REBASE_OPCODE_DONE => done = true
+      REBASE_OPCODE_SET_TYPE_IMM => ()
+      REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB => {
+        seg_index = imm
+        let (v, c2) = read_uleb128(b, cur)
+        seg_offset = v.reinterpret_as_int64()
+        cur = c2
+      }
+      REBASE_OPCODE_ADD_ADDR_ULEB => {
+        let (v, c2) = read_uleb128(b, cur)
+        seg_offset = seg_offset + v.reinterpret_as_int64()
+        cur = c2
+      }
+      REBASE_OPCODE_ADD_ADDR_IMM_SCALED => seg_offset = seg_offset + imm * 8L
+      REBASE_OPCODE_DO_REBASE_IMM_TIMES =>
+        for _ in 0..<imm.to_int() {
+          emit_rebase(b, segs, seg_index, seg_offset, out)
+          seg_offset = seg_offset + 8L
+        }
+      REBASE_OPCODE_DO_REBASE_ULEB_TIMES => {
+        let (v, c2) = read_uleb128(b, cur)
+        cur = c2
+        let n = v.reinterpret_as_int64()
+        for _ in 0..<n.to_int() {
+          emit_rebase(b, segs, seg_index, seg_offset, out)
+          seg_offset = seg_offset + 8L
+        }
+      }
+      REBASE_OPCODE_DO_REBASE_ADD_ADDR_ULEB => {
+        emit_rebase(b, segs, seg_index, seg_offset, out)
+        let (v, c2) = read_uleb128(b, cur)
+        cur = c2
+        seg_offset = seg_offset + 8L + v.reinterpret_as_int64()
+      }
+      REBASE_OPCODE_DO_REBASE_ULEB_TIMES_SKIPPING_ULEB => {
+        let (v, c2) = read_uleb128(b, cur)
+        let (skip, c3) = read_uleb128(b, c2)
+        cur = c3
+        let n = v.reinterpret_as_int64()
+        let s = skip.reinterpret_as_int64()
+        for _ in 0..<n.to_int() {
+          emit_rebase(b, segs, seg_index, seg_offset, out)
+          seg_offset = seg_offset + 8L + s
+        }
+      }
+      _ => raise Unsupported(what="rebase opcode")
+    }
+  }
+}
+
+///|
+/// Records one rebase at the current cursor position.
+///
+/// Unlike a chained rebase, whose target is packed into the slot's own bits,
+/// a classic rebase leaves the slot holding the pointer it should end up with
+/// once the image base is added. Reading the eight bytes back is what lets the
+/// output name a target instead of reporting zero.
+fn emit_rebase(
+  b : Bounds,
+  segs : Array[Segment],
+  seg_index : Int64,
+  seg_offset : Int64,
+  out : Array[Fixup],
+) -> Unit raise MachscopeError {
+  if seg_index < 0L || seg_index >= segs.length().to_int64() {
+    return
+  }
+  let seg = segs[seg_index.to_int()]
+  let address = seg.vmaddr + seg_offset
+  let target = match classic_file_offset(segs, seg_index, seg_offset, b.start) {
+    Some(off) => {
+      let (raw, _) = b.read_u64(Cursor::{ pos: off, endian: Endian::Little, })
+      raw
+    }
+    // A slot in a zero-fill page has no bytes to read. dyld would still rebase
+    // it at load time, so the fixup is reported with a zero target rather than
+    // dropped.
+    None => 0L
+  }
+  out.push(Fixup::{
+    address,
+    target,
+    import_index: None,
+    symbol: None,
+    library_ordinal: 0U,
+    key: 0U,
+    diversity: 0U,
+    has_discriminator: false,
+    is_lazy: false,
+  })
+}
+
+///|
+/// Walks a classic bind opcode stream.
+fn walk_binds(
+  b : Bounds,
+  start : Int64,
+  size : Int64,
+  segs : Array[Segment],
+  lazy_~ : Bool,
+  out : Array[Fixup],
+) -> Unit raise MachscopeError {
+  if size == 0L {
+    return
+  }
+  b.require(start, size, "bind opcodes")
+  let mut cur = Cursor::{ pos: start, endian: Endian::Little, }
+  let end = start + size
+  let mut seg_index = 0L
+  let mut seg_offset = 0L
+  let mut ordinal = 0U
+  let mut name = ""
+  let mut steps = 0
+  let mut done = false
+  while !done && cur.pos < end {
+    steps = steps + 1
+    if steps > 1_000_000 {
+      raise LimitExceeded(what="bind opcode count", limit=1_000_000L)
+    }
+    let (byte, c1) = b.read_u8(cur)
+    cur = c1
+    let opcode = byte & BIND_OPCODE_MASK
+    let imm = (byte & BIND_IMMEDIATE_MASK).to_int64()
+    match opcode {
+      BIND_OPCODE_DONE =>
+        // In the lazy stream `DONE` separates one entry from the next rather
+        // than ending the stream, so only stop when the stream is exhausted.
+        //
+        // Each entry there re-establishes its own symbol and ordinal, but a
+        // stream that omits one would otherwise inherit the previous entry's,
+        // and attribute a slot to a library that never mentions it. Clearing
+        // both keeps an incomplete entry from borrowing its neighbour's name,
+        // which is how `/usr/bin/stz` came to bind `__ZdlPv` in lib 0 — a
+        // library the import table does not have.
+        if cur.pos >= end {
+          done = true
+        } else {
+          name = ""
+          ordinal = 0U
+        }
+      BIND_OPCODE_SET_DYLIB_ORDINAL_IMM =>
+        ordinal = imm.to_int().reinterpret_as_uint()
+      BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB => {
+        let (v, c2) = read_uleb128(b, cur)
+        cur = c2
+        ordinal = v.reinterpret_as_int64().to_int().reinterpret_as_uint()
+      }
+      BIND_OPCODE_SET_DYLIB_SPECIAL_IMM =>
+        // A zero immediate means ordinal 0; otherwise the value is sign
+        // extended from the four bits, which is how the negative special
+        // ordinals (`SELF`, `MAIN_EXECUTABLE`, `FLAT_LOOKUP`) are stored.
+        ordinal = if imm == 0L {
+          0U
+        } else {
+          let v = (imm | 0xF0L).to_int()
+          v.reinterpret_as_uint()
+        }
+      BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM => {
+        let (s, c2) = read_c_string(b, cur)
+        name = s
+        cur = c2
+      }
+      BIND_OPCODE_SET_TYPE_IMM => ()
+      BIND_OPCODE_SET_ADDEND_SLEB => {
+        let (_, c2) = read_sleb128(b, cur)
+        cur = c2
+      }
+      BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB => {
+        seg_index = imm
+        let (v, c2) = read_uleb128(b, cur)
+        seg_offset = v.reinterpret_as_int64()
+        cur = c2
+      }
+      BIND_OPCODE_ADD_ADDR_ULEB => {
+        let (v, c2) = read_uleb128(b, cur)
+        seg_offset = seg_offset + v.reinterpret_as_int64()
+        cur = c2
+      }
+      BIND_OPCODE_DO_BIND => {
+        emit_bind(segs, seg_index, seg_offset, ordinal, name, lazy_, out)
+        seg_offset = seg_offset + 8L
+      }
+      BIND_OPCODE_DO_BIND_ADD_ADDR_ULEB => {
+        emit_bind(segs, seg_index, seg_offset, ordinal, name, lazy_, out)
+        let (v, c2) = read_uleb128(b, cur)
+        cur = c2
+        seg_offset = seg_offset + 8L + v.reinterpret_as_int64()
+      }
+      BIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED => {
+        emit_bind(segs, seg_index, seg_offset, ordinal, name, lazy_, out)
+        seg_offset = seg_offset + 8L + imm * 8L
+      }
+      BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB => {
+        let (v, c2) = read_uleb128(b, cur)
+        let (skip, c3) = read_uleb128(b, c2)
+        cur = c3
+        let n = v.reinterpret_as_int64()
+        let s = skip.reinterpret_as_int64()
+        for _ in 0..<n.to_int() {
+          emit_bind(segs, seg_index, seg_offset, ordinal, name, lazy_, out)
+          seg_offset = seg_offset + 8L + s
+        }
+      }
+      _ => raise Unsupported(what="bind opcode")
+    }
+  }
+}
+
+///|
+/// Records one bind at the current cursor position.
+fn emit_bind(
+  segs : Array[Segment],
+  seg_index : Int64,
+  seg_offset : Int64,
+  ordinal : UInt32,
+  name : String,
+  lazy_ : Bool,
+  out : Array[Fixup],
+) -> Unit {
+  if seg_index < 0L || seg_index >= segs.length().to_int64() {
+    return
+  }
+  let seg = segs[seg_index.to_int()]
+  out.push(Fixup::{
+    address: seg.vmaddr + seg_offset,
+    target: 0L,
+    import_index: None,
+    symbol: Some(name),
+    library_ordinal: ordinal,
+    key: 0U,
+    diversity: 0U,
+    has_discriminator: false,
+    is_lazy: lazy_,
+  })
+}
+
+///|
+/// Walks the classic dyld-info streams of a slice.
+///
+/// The three bind streams are concatenated in the order dyld applies them:
+/// the non-lazy binds, the weak binds, then the lazy binds. `dyld_info` prints
+/// them in file order, which is the same order, so the result lines up with it.
+pub fn classic_fixups(slice : MachSlice) -> Array[Fixup] raise MachscopeError {
+  let info = match dyld_info(slice) {
+    Some(i) => i
+    None => return []
+  }
+  let segs = segments(slice)
+  let b = slice.bounds
+  let out : Array[Fixup] = []
+  walk_rebases(b, info.rebase_off, info.rebase_size, segs, out)
+  walk_binds(b, info.bind_off, info.bind_size, segs, lazy_=false, out)
+  walk_binds(b, info.weak_bind_off, info.weak_bind_size, segs, lazy_=false, out)
+  // The lazy stream is the one dyld defers: these slots stay as they are until
+  // the first call through them, which is why `dyld_info` labels them
+  // `lazy-bind` rather than `bind`.
+  walk_binds(b, info.lazy_bind_off, info.lazy_bind_size, segs, lazy_=true, out)
+  out
+}
+
+///|
+/// Decides whether a rebase's raw target is a virtual address or an offset
+/// from the image base.
+///
+/// It cannot be decided from the pointer format alone, which is what an earlier
+/// version of this code got wrong. Both forms occur in arm64e slots:
+/// `/bin/chmod` stores `0x100002c2e` in a slot already, while `/bin/date` stores
+/// `0x20be` for the same kind of pointer. The format says how the bits are laid
+/// out, not whether the image base is among them.
+///
+/// So the test is where the value lands. A target that already falls inside
+/// the image's mapped range is the address. One that does not, but does once the
+/// base is added, is an offset. A value that is neither stays as it is: it
+/// points somewhere outside this image, which is unusual but not unreadable.
+fn resolve_rebase_target(
+  raw : Int64,
+  format : UInt32,
+  image_base : Int64,
+  image_end : Int64,
+) -> Int64 {
+  if raw >= image_base && raw < image_end {
+    return raw
+  }
+  let biased = image_base + raw
+  if biased >= image_base && biased < image_end {
+    return biased
+  }
+  // `_64_OFFSET` is documented to be an offset and nothing else, so an image
+  // whose segments do not cover the result still gets the base added.
+  if format == CHAINED_PTR_64_OFFSET {
+    return biased
+  }
+  raw
 }

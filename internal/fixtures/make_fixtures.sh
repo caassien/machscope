@@ -76,6 +76,16 @@ clang -arch arm64 $CLANG_FLAGS -c -o sample.chains.o chains.c
 touch -t $STAMP sample.chains.o
 clang -arch arm64 $LDFLAGS sample.chains.o -o sample.chains
 
+# `sample.classic`: the pre-chained-fixup encoding, `LC_DYLD_INFO_ONLY` plus two
+# opcode streams. The linker emits chained fixups by default now, so this needs
+# `-no_fixup_chains` to produce the old form. Without this fixture the classic
+# decoder had no test at all, which is why a parser that returned an empty array
+# for those images looked correct: every fixture happened to be chained.
+clang -arch x86_64 $CLANG_FLAGS -c -o sample.classic.o classic.c
+touch -t $STAMP sample.classic.o
+clang -arch x86_64 $LDFLAGS -Wl,-no_fixup_chains sample.classic.o \
+      -o sample.classic
+
 # `sample.arm64e`: the same program built for arm64e, which is what makes the
 # authenticated-pointer branch of `decode_slot` reachable. arm64e fixes up
 # imports through `__auth_got` with a signing key and a diversity value packed
@@ -159,7 +169,7 @@ PY
 # read.
 rm -rf sample.arm64 sample.x86_64 sample.arm64.thin sample.x86_64.thin \
        sample.arm64.o sample.x86_64.o sample.arm64e.o sample.dwarf4.o \
-       sample.chains.o sample.dwarf4.bin build.dSYM dwarf4.dSYM entitled.bin \
-       entitled.bin.dSYM
+       sample.chains.o sample.classic.o sample.dwarf4.bin build.dSYM \
+       dwarf4.dSYM entitled.bin entitled.bin.dSYM
 
 ls -l

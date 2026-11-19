@@ -98,6 +98,8 @@ pub fn chained_fixups(MachSlice) -> ChainedFixups? raise MachscopeError
 
 pub fn children(Bytes, DerElement) -> Array[DerElement] raise MachscopeError
 
+pub fn classic_fixups(MachSlice) -> Array[Fixup] raise MachscopeError
+
 pub fn code_directory(MachSlice, SignatureRegion) -> CodeDirectory? raise MachscopeError
 
 pub fn debug_line_section(MachSlice) -> Section? raise MachscopeError
@@ -105,6 +107,8 @@ pub fn debug_line_section(MachSlice) -> Section? raise MachscopeError
 pub fn debug_line_str_section(MachSlice) -> Section? raise MachscopeError
 
 pub fn decode_der_plist(Bytes) -> Plist raise MachscopeError
+
+pub fn dyld_info(MachSlice) -> DyldInfo? raise MachscopeError
 
 pub fn entitlements(MachSlice, SignatureRegion) -> Entitlements? raise MachscopeError
 
@@ -155,6 +159,8 @@ pub fn subtype_capabilities(Int64) -> Int64
 pub fn symbols(MachSlice) -> Array[Symbol] raise MachscopeError
 
 pub fn symtab_command(MachSlice, RawCommand) -> SymtabCommand raise MachscopeError
+
+pub fn uses_classic_dyld_info(MachSlice) -> Bool raise MachscopeError
 
 // Errors
 pub(all) suberror MachscopeError {
@@ -227,6 +233,17 @@ pub(all) struct DerElement {
   next : Int64
 }
 
+pub(all) struct DyldInfo {
+  rebase_off : Int64
+  rebase_size : Int64
+  bind_off : Int64
+  bind_size : Int64
+  weak_bind_off : Int64
+  weak_bind_size : Int64
+  lazy_bind_off : Int64
+  lazy_bind_size : Int64
+}
+
 pub(all) enum Endian {
   Little
   Big
@@ -274,6 +291,7 @@ pub(all) struct Fixup {
   key : UInt32
   diversity : UInt32
   has_discriminator : Bool
+  is_lazy : Bool
 }
 pub fn Fixup::is_bind(Self) -> Bool
 pub fn Fixup::to_json(Self) -> @json.Json

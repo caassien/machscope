@@ -300,10 +300,15 @@ fn report(slices : Array[(String, @lib.MachSlice)], mode : Subcommand) -> Unit {
         println("\{arch}: \{list.length()} fixups")
         for f in list {
           match f.symbol {
-            Some(sym) =>
+            Some(sym) => {
+              // `dyld_info` distinguishes these, and so should this: a lazy
+              // bind is not applied at launch, so a list that calls it a bind
+              // would misreport what the loader does before `main` runs.
+              let kind = if f.is_lazy { "lazy-bind" } else { "bind" }
               println(
-                "  0x\{@lib.hex(f.address)} bind \{sym} (lib \{f.library_ordinal})",
+                "  0x\{@lib.hex(f.address)} \{kind} \{sym} (lib \{f.library_ordinal})",
               )
+            }
             None =>
               println(
                 "  0x\{@lib.hex(f.address)} rebase -> 0x\{@lib.hex(f.target)}",

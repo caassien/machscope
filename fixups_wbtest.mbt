@@ -462,3 +462,88 @@ test "oracle: a 65-slot chain is walked to its end, as dyld_info does" {
     }
   }
 }
+
+///|
+test "oracle: the classic dyld-info streams decode like dyld_info prints them" {
+  // `sample.classic` is linked with `-no_fixup_chains`, so it describes its
+  // relocations the old way: an `LC_DYLD_INFO_ONLY` command naming a rebase
+  // opcode stream and three bind streams. `dyld_info -fixups` reports six rows
+  // for it, and all six are asserted here by address, kind and target.
+  //
+  // The fixture exists because every other binary in this directory is chained.
+  // Before it, `fixups` returned an empty array for a classic image and nothing
+  // noticed — 71 system binaries take that path, including `ls`, `cp` and `mv`.
+  let slice = match parse(fixture_bytes("sample.classic")) {
+    Thin(s) => s
+    Fat(_) => fail("expected thin")
+  }
+  // The command itself has to be found, or the walk below would silently have
+  // nothing to walk.
+  let info = match dyld_info(slice) {
+    Some(i) => i
+    None => fail("expected LC_DYLD_INFO_ONLY")
+  }
+  inspect(info.rebase_size > 0L, content="true")
+  inspect(info.bind_size > 0L, content="true")
+  // The image uses this encoding and not chained fixups; the two helpers that
+  // tell them apart must agree with the load commands.
+  inspect(uses_classic_dyld_info(slice), content="true")
+  inspect(chained_fixups(slice) is None, content="true")
+
+  let found = fixups(slice)
+  inspect(found.length(), content="6")
+  // dyld_info, in file order:
+  //   __DATA,__la_symbol_ptr 0x100002000 rebase 0x10000061C
+  //   __DATA,__data          0x100002010 rebase 0x10000062D
+  //   __DATA,__data          0x100002018 rebase 0x100000633
+  //   __DATA,__data          0x100002020 rebase 0x100000638
+  //   __DATA_CONST,__got     0x100001000 bind   dyld_stub_binder
+  //   __DATA,__la_symbol_ptr 0x100002000 lazy-bind _printf
+  let rebases = found.filter(fn(f) { !f.is_bind() })
+  inspect(rebases.length(), content="4")
+  // Look the rebases up by address rather than by position: the walk emits the
+  // rebase stream before the bind streams, so relying on an index would make
+  // this assert the stream order rather than the decode.
+  let target_of : Map[Int64, Int64] = Map([])
+  for f in rebases {
+    target_of[f.address] = f.target
+  }
+  inspect(target_of[0x1_0000_2000L], content="4294968860") // 0x10000061c
+  inspect(target_of[0x1_0000_2010L], content="4294968877") // 0x10000062d
+  inspect(target_of[0x1_0000_2018L], content="4294968883") // 0x100000633
+  inspect(target_of[0x1_0000_2020L], content="4294968888") // 0x100000638
+  // A classic rebase leaves the target in the slot itself rather than packing it
+  // into bits, so a zero here would mean the slot bytes were never read.
+  let mut zero_targets = 0
+  for f in rebases {
+    if f.target == 0L {
+      zero_targets = zero_targets + 1
+    }
+  }
+  inspect(zero_targets, content="0")
+
+  let binds = found.filter(fn(f) { f.is_bind() })
+  inspect(binds.length(), content="2")
+  inspect(binds[0].symbol is Some("dyld_stub_binder"), content="true")
+  inspect(binds[0].is_lazy, content="false")
+  // The lazy stream is a separate stream and `dyld_info` labels it separately.
+  // Flattening it into `bind` would tell a caller that the loader resolves this
+  // slot at launch, which it does not.
+  inspect(binds[1].symbol is Some("_printf"), content="true")
+  inspect(binds[1].is_lazy, content="true")
+  inspect(binds[1].library_ordinal.to_int64(), content="1")
+}
+
+///|
+test "classic: a chained image is not reported as using the old encoding" {
+  // The predicate that routes between the two decoders has to answer for both
+  // kinds; one that returned true unconditionally would send every chained
+  // binary down the classic path and find no opcodes in it.
+  let slice = match parse(fixture_bytes("sample.bin")) {
+    Thin(s) => s
+    Fat(_) => fail("expected thin")
+  }
+  inspect(uses_classic_dyld_info(slice), content="false")
+  inspect(dyld_info(slice) is None, content="true")
+  inspect(chained_fixups(slice) is Some(_), content="true")
+}

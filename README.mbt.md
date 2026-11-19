@@ -63,6 +63,7 @@ below for what the library does and does not claim about a signature.
 | `--json` output for every mode | done |
 | dyld export trie | done |
 | Chained fixups: `PTR_64`, `PTR_64_OFFSET`, arm64e authenticated | done |
+| Classic `LC_DYLD_INFO` rebase/bind opcode streams | done |
 | `.debug_info` variable and type lookup | planned |
 
 ## How it is laid out
@@ -171,8 +172,27 @@ All 65 addresses and types match `dyld_info -fixups` on that file: one bind in
 rebases matter — a chain of length one never reads the `next` field, so a single
 fixup cannot tell a correct walk from a broken one. That is how a stride bug
 once shipped: `next` was read from the low bits of `target` instead of bit 51,
-and `/usr/bin/ssh` reported 12 fixups where `dyld_info` reported 1024. The same
-check against system binaries now agrees address for address.
+and `/usr/bin/ssh` reported 12 fixups where `dyld_info` reported 1024.
+
+Images linked before chained fixups describe the same relocations with two
+opcode streams named by `LC_DYLD_INFO_ONLY`, and x86_64 slices of universal
+binaries still do. Both encodings decode into the same `Fixup`:
+
+```
+$ machscope --fixups internal/fixtures/sample.classic
+internal/fixtures/sample.classic: 6 fixups
+  0x100002000 rebase -> 0x10000061c
+  ...
+  0x100001000 bind dyld_stub_binder (lib 1)
+  0x100002000 lazy-bind _printf (lib 1)
+```
+
+The lazy bind is labelled apart from the plain bind on purpose: dyld does not
+resolve that slot at launch, and a caller asking what the loader does before
+`main` runs needs the difference.
+
+Against all 967 Mach-O files in `/bin`, `/usr/bin`, `/usr/sbin` and `/sbin`,
+every address and type agrees with `dyld_info -fixups`.
 
 ## JSON output
 
@@ -253,14 +273,15 @@ Three layers:
    No real linker emits an unaligned `cmdsize` or a big-endian PowerPC image,
    so those cases have to be constructed.
 2. **Fixtures** in `internal/fixtures/`, all generated from `sample.c`,
-   `chains.c` and `entitled.c` by `make_fixtures.sh`: a universal binary, its
-   slices, an arm64e build, a chain long enough to walk, a DWARF 5 dSYM, a
+   `chains.c`, `classic.c` and `entitled.c` by `make_fixtures.sh`: a universal
+   binary, its slices, an arm64e build, a chain long enough to walk, one image
+   using the pre-chained-fixup `LC_DYLD_INFO` encoding, a DWARF 5 dSYM, a
    DWARF 4 dSYM, and the two entitlement payloads `codesign` wrote.
 3. **Differential tests** assert values copied from `otool -h`, `otool -f`,
    `otool -l`, `nm`, `codesign -dvv`, `dyld_info -exports`, `dyld_info -fixups`
    and `dwarfdump --debug-line` run on those same fixtures.
 
-The suite is 131 tests, 34 of them differential. `moon test --enable-coverage`
+The suite is 133 tests, 35 of them differential. `moon test --enable-coverage`
 plus `moon coverage analyze` reports what is not exercised; the remaining gaps
 are mostly error branches for malformed inputs that no fixture can reach.
 
