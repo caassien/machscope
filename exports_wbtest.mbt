@@ -139,3 +139,41 @@ test "export trie: a region clipped to one byte is rejected, not truncated" {
     Err(_) => ()
   }
 }
+
+///|
+test "oracle: the weak definition is flagged, exactly as dyld_info marks it" {
+  // `dyld_info -exports sample.weak`:
+  //   0x00000000  __mh_execute_header
+  //   0x00000420  _main
+  //   0x00000418  _normal_thing
+  //   0x00000410  _weak_thing [weak-def]
+  //
+  // One weak and one strong definition in the same trie, so this asserts the
+  // flag is per symbol. Until this fixture existed, `EXPORT_FLAG_WEAK` was
+  // untested: every export in every other fixture is strong, so changing the
+  // constant it is read with broke nothing.
+  let list = exports_of("sample.weak")
+  inspect(list.length(), content="4")
+  let by_name : Map[String, Export] = Map([])
+  for e in list {
+    by_name[e.name] = e
+  }
+  inspect(by_name["_weak_thing"].is_weak(), content="true")
+  inspect(by_name["_normal_thing"].is_weak(), content="false")
+  inspect(by_name["_main"].is_weak(), content="false")
+  inspect(by_name["__mh_execute_header"].is_weak(), content="false")
+  // The flag must not disturb the address or the kind, which are read from
+  // other bits of the same field.
+  inspect(
+    by_name["_weak_thing"].address.reinterpret_as_int64(),
+    content="1040", // 0x410
+  )
+  inspect(
+    by_name["_normal_thing"].address.reinterpret_as_int64(),
+    content="1048",
+  )
+  for e in list {
+    inspect(e.kind().reinterpret_as_int64(), content="0") // KIND_REGULAR
+    inspect(e.is_reexport(), content="false")
+  }
+}

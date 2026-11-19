@@ -86,6 +86,14 @@ touch -t $STAMP sample.classic.o
 clang -arch x86_64 $LDFLAGS -Wl,-no_fixup_chains sample.classic.o \
       -o sample.classic
 
+# `sample.weak`: one weakly defined function in the export trie, so the
+# `EXPORT_SYMBOL_FLAGS_WEAK_DEFINITION` branch has a set bit to read. Every
+# other fixture exports only strong definitions, and a flag bit that is never
+# set cannot be tested by asserting the flag is false.
+clang -arch arm64 $CLANG_FLAGS -c -o sample.weak.o weak.c
+touch -t $STAMP sample.weak.o
+clang -arch arm64 $LDFLAGS sample.weak.o -o sample.weak
+
 # `sample.arm64e`: the same program built for arm64e, which is what makes the
 # authenticated-pointer branch of `decode_slot` reachable. arm64e fixes up
 # imports through `__auth_got` with a signing key and a diversity value packed
@@ -169,7 +177,7 @@ PY
 # read.
 rm -rf sample.arm64 sample.x86_64 sample.arm64.thin sample.x86_64.thin \
        sample.arm64.o sample.x86_64.o sample.arm64e.o sample.dwarf4.o \
-       sample.chains.o sample.classic.o sample.dwarf4.bin build.dSYM \
-       dwarf4.dSYM entitled.bin entitled.bin.dSYM
+       sample.chains.o sample.classic.o sample.weak.o sample.dwarf4.bin \
+       build.dSYM dwarf4.dSYM entitled.bin entitled.bin.dSYM
 
 ls -l
